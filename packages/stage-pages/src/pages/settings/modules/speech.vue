@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { VoiceType } from '@proj-airi/stage-ui/composables'
+import type { LocalVoiceServiceStartErrorCode } from '@proj-airi/stage-ui/domains/localVoiceServices'
 import type { SpeechProviderWithExtraOptions } from '@xsai-ext/providers/utils'
 
 import { errorMessageFrom } from '@moeru/std'
@@ -12,10 +13,18 @@ import {
   VoiceCardManySelect,
 } from '@proj-airi/stage-ui/components'
 import { useAnalytics } from '@proj-airi/stage-ui/composables'
+import { deriveSpeechOutputProfileFromSelection } from '@proj-airi/stage-ui/domains/speechRouting'
 import { OFFICIAL_SPEECH_PROVIDER_ID, OFFICIAL_SPEECH_STREAMING_PROVIDER_ID } from '@proj-airi/stage-ui/libs/providers/providers/official'
+import { notifyVoiceSettingsChanged, voiceSettingsStorageKeys } from '@proj-airi/stage-ui/services/voice-settings-sync'
 import { useAiriCardStore } from '@proj-airi/stage-ui/stores'
 import { useSpeechStore } from '@proj-airi/stage-ui/stores/modules/speech'
-import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
+import {
+  GPT_SOVITS_LOCAL_DEFAULT_MODEL,
+  GPT_SOVITS_LOCAL_DEFAULT_VOICE,
+  GPT_SOVITS_LOCAL_PROVIDER_ID,
+  useProvidersStore,
+} from '@proj-airi/stage-ui/stores/providers'
+import { useSpeechOutputRoutingStore } from '@proj-airi/stage-ui/stores/speech-output-routing'
 import {
   FieldCheckbox,
   FieldInput,
@@ -25,14 +34,18 @@ import {
 } from '@proj-airi/ui'
 import { generateSpeech } from '@xsai/generate-speech'
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink } from 'vue-router'
+
+import { startLocalVoiceService, stopLocalVoiceService } from '../../../composables/use-local-voice-service-start'
 
 const { t } = useI18n()
 const providersStore = useProvidersStore()
 const speechStore = useSpeechStore()
+const speechOutputRoutingStore = useSpeechOutputRoutingStore()
 const airiCardStore = useAiriCardStore()
+const managesVoiceConversationProfile = shallowRef(!!speechOutputRoutingStore.voiceConversationProfile)
 const { allAudioSpeechProvidersMetadata, configuredSpeechProvidersMetadata } = storeToRefs(providersStore)
 const {
   activeSpeechProvider,
@@ -69,9 +82,32 @@ const isGenerating = ref(false)
 const audioUrl = ref('')
 const audioPlayer = ref<HTMLAudioElement | null>(null)
 const errorMessage = ref('')
+const speechProviderSwitchingId = shallowRef<string>()
+const speechProviderSwitchErrorCode = shallowRef<LocalVoiceServiceStartErrorCode | 'validation_failed' | 'unexpected'>()
+const speechProviderSwitchNoticeCode = shallowRef<'previous-service-not-managed' | 'previous-service-stop-failed'>()
 let lastOfficialTtsExposureKey = ''
 
+const speechProviderSwitchError = computed(() => speechProviderSwitchErrorCode.value
+  ? t(`settings.pages.modules.speech.local-service-switch.errors.${speechProviderSwitchErrorCode.value}`)
+  : '')
+const speechProviderSwitchNotice = computed(() => speechProviderSwitchNoticeCode.value
+  ? t(`settings.pages.modules.speech.local-service-switch.notices.${speechProviderSwitchNoticeCode.value}`)
+  : '')
+
 const STREAMING_MODEL_OPTION_PREFIX = 'streaming:'
+
+function manageVoiceConversationProfile() {
+  managesVoiceConversationProfile.value = true
+}
+
+function restoreMiniMaxVoiceFromConversationProfile() {
+  const profile = speechOutputRoutingStore.voiceConversationProfile
+  if (activeSpeechProvider.value === 'minimax-speech'
+    && !activeSpeechVoiceId.value
+    && profile?.providerId === 'minimax-speech') {
+    activeSpeechVoiceId.value = profile.voiceId
+  }
+}
 
 const selectableSpeechSources = computed(() => {
   const configuredSources = configuredSpeechProvidersMetadata.value
@@ -106,7 +142,7 @@ const displayedSpeechSource = computed({
     return activeSpeechProvider.value
   },
   set: (value: string) => {
-    selectSpeechSource(value)
+    void selectSpeechSource(value)
   },
 })
 
@@ -185,6 +221,7 @@ const displayedVoiceOptions = computed(() => {
 const displayedSpeechVoiceId = computed({
   get: () => activeSpeechVoiceId.value,
   set: (value: string) => {
+    manageVoiceConversationProfile()
     activeSpeechVoiceId.value = value
   },
 })
@@ -288,11 +325,54 @@ async function selectSpeechVoice(voiceId: string | undefined) {
   })
 }
 
-function selectSpeechSource(sourceId: string) {
-  activeSpeechProvider.value = sourceId
+async function selectSpeechSource(sourceId: string) {
+  if (!sourceId || speechProviderSwitchingId.value || sourceId === activeSpeechProvider.value)
+    return
+
+  const previousProvider = activeSpeechProvider.value
+  speechProviderSwitchingId.value = sourceId
+  speechProviderSwitchErrorCode.value = undefined
+  speechProviderSwitchNoticeCode.value = undefined
+
+  try {
+    if (sourceId === GPT_SOVITS_LOCAL_PROVIDER_ID) {
+      providersStore.initializeProvider(sourceId)
+      const startResult = await startLocalVoiceService('gpt-sovits')
+      if (!startResult.ok) {
+        speechProviderSwitchErrorCode.value = startResult.errorCode
+        return
+      }
+
+      await providersStore.disposeProviderInstance(sourceId)
+      const valid = await providersStore.validateProvider(sourceId, { force: true })
+      if (!valid) {
+        speechProviderSwitchErrorCode.value = 'validation_failed'
+        return
+      }
+    }
+
+    activeSpeechProvider.value = sourceId
+    manageVoiceConversationProfile()
+
+    if (previousProvider === GPT_SOVITS_LOCAL_PROVIDER_ID && sourceId !== previousProvider) {
+      const stopResult = await stopLocalVoiceService('gpt-sovits')
+      if (!stopResult.ok)
+        speechProviderSwitchNoticeCode.value = 'previous-service-stop-failed'
+      else if (!stopResult.stopped)
+        speechProviderSwitchNoticeCode.value = 'previous-service-not-managed'
+      await providersStore.disposeProviderInstance(previousProvider)
+    }
+  }
+  catch {
+    speechProviderSwitchErrorCode.value = 'unexpected'
+  }
+  finally {
+    speechProviderSwitchingId.value = undefined
+  }
 }
 
 function selectSpeechModel(modelOptionId: string) {
+  manageVoiceConversationProfile()
   const streamingModelId = modelIdFromStreamingOptionId(modelOptionId)
   const nextProvider = streamingModelId == null
     ? activeSpeechProvider.value === OFFICIAL_SPEECH_STREAMING_PROVIDER_ID
@@ -357,6 +437,7 @@ function syncOpenAICompatibleSettings() {
 }
 
 onMounted(async () => {
+  restoreMiniMaxVoiceFromConversationProfile()
   await providersStore.loadModelsForConfiguredProviders()
   speechStore.ensureActiveSpeechModel()
   await speechStore.loadVoicesForProvider(activeSpeechProvider.value, activeSpeechModel.value || undefined)
@@ -381,6 +462,11 @@ watch(activeSpeechProvider, async (newProvider, oldProvider) => {
     activeSpeechVoice.value = undefined
   }
 
+  if (newProvider === GPT_SOVITS_LOCAL_PROVIDER_ID) {
+    activeSpeechModel.value = GPT_SOVITS_LOCAL_DEFAULT_MODEL
+    activeSpeechVoiceId.value = GPT_SOVITS_LOCAL_DEFAULT_VOICE
+  }
+
   // Re-seed the streaming default model after the reset above so its voices
   // load model-scoped (the server only returns recommended voices for an
   // explicit ?model=). No-op for other providers / when a model is selected.
@@ -395,15 +481,53 @@ watch(activeSpeechModel, async (model) => {
   if (!activeSpeechProvider.value)
     return
 
-  activeSpeechVoiceId.value = ''
-  activeSpeechVoice.value = undefined
+  // MiniMax HD and Turbo share the same account voice catalog. Keeping the
+  // selected voice makes a model-only switch immediately usable by the voice
+  // conversation profile instead of silently leaving that profile on Turbo.
+  if (activeSpeechProvider.value === 'minimax-speech') {
+    restoreMiniMaxVoiceFromConversationProfile()
+  }
+  else {
+    activeSpeechVoiceId.value = ''
+    activeSpeechVoice.value = undefined
+  }
 
   await speechStore.loadVoicesForProvider(activeSpeechProvider.value, model || undefined)
   trackOfficialTtsExposure(activeSpeechProvider.value, currentTtsModelId())
 })
 
-watch([activeSpeechProvider, activeSpeechModel, activeSpeechVoiceId], ([provider, model, voiceId]) => {
+watch([activeSpeechProvider, activeSpeechModel, activeSpeechVoiceId], ([provider, model, voiceId], previous) => {
   airiCardStore.updateActiveCardSpeech({ provider, model, voice_id: voiceId })
+
+  const providerChanged = !!previous && previous[0] !== provider
+  if (managesVoiceConversationProfile.value) {
+    const nextProfile = providerChanged
+      ? null
+      : deriveSpeechOutputProfileFromSelection(
+          speechOutputRoutingStore.voiceConversationProfile,
+          { providerId: provider, modelId: model, voiceId },
+          provider === 'minimax-speech',
+        )
+    speechOutputRoutingStore.setProfile('voice-conversation', nextProfile)
+  }
+
+  notifyVoiceSettingsChanged(managesVoiceConversationProfile.value
+    ? [
+        voiceSettingsStorageKeys.activeSpeechProvider,
+        voiceSettingsStorageKeys.activeSpeechModel,
+        voiceSettingsStorageKeys.activeSpeechVoice,
+        voiceSettingsStorageKeys.voiceConversationSpeechProfile,
+      ]
+    : [
+        voiceSettingsStorageKeys.activeSpeechProvider,
+        voiceSettingsStorageKeys.activeSpeechModel,
+        voiceSettingsStorageKeys.activeSpeechVoice,
+      ])
+})
+
+watch(() => speechOutputRoutingStore.voiceConversationProfile, (profile) => {
+  if (profile)
+    managesVoiceConversationProfile.value = true
 })
 
 // Function to generate speech
@@ -561,6 +685,7 @@ onUnmounted(() => {
 })
 
 function updateCustomVoiceName(value: string | undefined) {
+  manageVoiceConversationProfile()
   activeSpeechVoiceId.value = value || ''
   if (!value) {
     activeSpeechVoice.value = undefined
@@ -621,6 +746,7 @@ function handleDeleteProvider(providerId: string) {
           <fieldset
             v-if="selectableSpeechSources.length > 0" flex="~ row gap-4"
             min-w-0 overflow-x-auto scroll-smooth role="radiogroup"
+            :disabled="!!speechProviderSwitchingId"
           >
             <RadioCardSimple
               v-for="source in selectableSpeechSources"
@@ -674,6 +800,15 @@ function handleDeleteProvider(providerId: string) {
               <div i-solar:arrow-right-line-duotone class="ml-auto text-xl text-neutral-400 dark:text-neutral-500" />
             </RouterLink>
           </div>
+          <p v-if="speechProviderSwitchingId" role="status" class="mt-2 text-sm text-primary-600 dark:text-primary-300">
+            {{ t('settings.pages.modules.speech.local-service-switch.switching') }}
+          </p>
+          <p v-if="speechProviderSwitchError" role="alert" class="mt-2 text-sm text-red-600 dark:text-red-300">
+            {{ speechProviderSwitchError }}
+          </p>
+          <p v-if="speechProviderSwitchNotice" role="status" class="mt-2 text-sm text-amber-600 dark:text-amber-300">
+            {{ speechProviderSwitchNotice }}
+          </p>
         </div>
       </div>
 

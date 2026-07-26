@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import type { ccv3 } from '@proj-airi/ccc'
+import type { CharacterCardV3ValidationError } from '@proj-airi/ccc'
 
+import { parseCharacterCardV3Json, parseCharacterCardV3Png } from '@proj-airi/ccc'
+import { isStageTamagotchi } from '@proj-airi/stage-shared'
 import { Alert } from '@proj-airi/stage-ui/components'
 import { useAiriCardStore } from '@proj-airi/stage-ui/stores/modules/airi-card'
 import { InputFileCard } from '@proj-airi/ui'
@@ -14,6 +16,8 @@ import CardCreate from './components/CardCreate.vue'
 import CardCreationDialog from './components/CardCreationDialog.vue'
 import CardDetailDialog from './components/CardDetailDialog.vue'
 import CardListItem from './components/CardListItem.vue'
+import CharacterSourceImportDialog from './components/characterSourceImport/CharacterSourceImportDialog.vue'
+import CompanionPresetImportPanel from './components/CompanionPresetImportPanel.vue'
 import DeleteCardDialog from './components/DeleteCardDialog.vue'
 
 const { t } = useI18n()
@@ -33,6 +37,8 @@ const initialTabId = ref<string>('')
 // Dialog state
 const isCardDialogOpen = ref(false)
 const isCardCreationDialogOpen = ref(false)
+const isCharacterSourceImportOpen = ref(false)
+const supportsCharacterSourceImport = isStageTamagotchi()
 
 // Search query
 const searchQuery = ref('')
@@ -41,6 +47,15 @@ const searchQuery = ref('')
 const sortOption = ref('nameAsc')
 
 const inputFiles = ref<File[]>([])
+const cardImportErrors = ref<CharacterCardV3ValidationError[]>([])
+
+function localizedCardImportError(error: CharacterCardV3ValidationError): string {
+  return t(`settings.pages.card.import_errors.codes.${error.code}`)
+}
+
+function localizedCardImportSuggestion(error: CharacterCardV3ValidationError): string {
+  return t(`settings.pages.card.import_errors.suggestions.${error.code}`)
+}
 
 // Card list data structure
 interface CardItem {
@@ -56,16 +71,27 @@ watch(inputFiles, async (newFiles) => {
   if (!file)
     return
 
+  cardImportErrors.value = []
   try {
-    const content = await file.text()
-    const cardJSON = JSON.parse(content) as ccv3.CharacterCardV3
+    const result = file.name.toLocaleLowerCase().endsWith('.png')
+      ? parseCharacterCardV3Png(new Uint8Array(await file.arrayBuffer()))
+      : parseCharacterCardV3Json(await file.text())
+    if (result.success === false) {
+      cardImportErrors.value = result.errors
+      return
+    }
 
     // Add card and select it
-    selectedCardId.value = addCard(cardJSON)
+    selectedCardId.value = addCard(result.value)
     isCardDialogOpen.value = true
   }
-  catch (error) {
-    console.error('Error processing card file:', error)
+  catch {
+    cardImportErrors.value = [{
+      code: 'invalid_json_value',
+      path: '$',
+      message: t('settings.pages.card.import_errors.read_failed'),
+      suggestion: t('settings.pages.card.import_errors.try_again'),
+    }]
   }
 })
 
@@ -148,6 +174,11 @@ function handleCardCreationDialog() {
   isCardCreationDialogOpen.value = true
 }
 
+function handleCharacterSourceCreated(cardId: string) {
+  selectedCardId.value = cardId
+  isCardDialogOpen.value = true
+}
+
 // Card activation
 function activateCard(id: string) {
   activeCardId.value = id
@@ -183,7 +214,7 @@ watch(() => [route.query.cardId, route.query.tab], ([cardId, tab]) => {
     isCardCreationDialogOpen.value = false
   }
   // Artistry or other editing tabs go to Creation/Edit dialog
-  else if (['artistry', 'identity', 'behavior', 'modules', 'settings'].includes(targetTab)) {
+  else if (['artistry', 'identity', 'behavior', 'worldbook', 'modules', 'settings'].includes(targetTab)) {
     editingCardId.value = cardId
     isCardCreationDialogOpen.value = true
     isCardDialogOpen.value = false
@@ -225,6 +256,42 @@ function getModuleShortName(id: string, module: 'consciousness' | 'voice') {
 
 <template>
   <div rounded-xl p-4 flex="~ col gap-4">
+    <CompanionPresetImportPanel />
+
+    <section
+      v-if="supportsCharacterSourceImport"
+      class="flex flex-col gap-3 border border-neutral-200 rounded-xl bg-neutral-50/50 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-neutral-800 dark:bg-neutral-900/50"
+    >
+      <div class="flex flex-col gap-1">
+        <h2 class="font-medium">
+          {{ t('settings.pages.card.character_source_import.entry_title') }}
+        </h2>
+        <p class="text-sm text-neutral-500 dark:text-neutral-400">
+          {{ t('settings.pages.card.character_source_import.entry_description') }}
+        </p>
+      </div>
+      <button
+        class="shrink-0 rounded-lg bg-primary-500 px-4 py-2 text-sm text-white font-medium hover:bg-primary-600"
+        @click="isCharacterSourceImportOpen = true"
+      >
+        {{ t('settings.pages.card.character_source_import.open') }}
+      </button>
+    </section>
+
+    <Alert v-if="cardImportErrors.length > 0" type="error">
+      <template #title>
+        {{ t('settings.pages.card.import_errors.title') }}
+      </template>
+      <template #content>
+        <ul class="list-disc pl-5 space-y-1">
+          <li v-for="error in cardImportErrors" :key="`${error.path}:${error.code}`">
+            <span class="font-medium">{{ error.path }}</span>: {{ localizedCardImportError(error) }}
+            {{ localizedCardImportSuggestion(error) }}
+          </li>
+        </ul>
+      </template>
+    </Alert>
+
     <!-- Toolbar with search and filters -->
     <div flex="~ row" flex-wrap items-center justify-between gap-4>
       <!-- Search bar -->
@@ -267,7 +334,7 @@ function getModuleShortName(id: string, module: 'consciousness' | 'voice') {
       :class="{ 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4 grid-auto-rows-[minmax(min-content,max-content)] grid-auto-flow-dense sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))] sm:gap-5 md:grid-cols-[repeat(auto-fill,minmax(220px,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(250px,1fr))]': cards.size > 0 }"
     >
       <!-- Upload card -->
-      <InputFileCard v-model="inputFiles" accept="*.json">
+      <InputFileCard v-model="inputFiles" accept="*.json,*.png">
         <template #default="{ isDragging }">
           <template v-if="!isDragging">
             <div flex flex-col items-center>
@@ -357,6 +424,12 @@ function getModuleShortName(id: string, module: 'consciousness' | 'voice') {
     v-model="isCardCreationDialogOpen"
     :card-id="editingCardId"
     :initial-tab="initialTabId"
+  />
+
+  <CharacterSourceImportDialog
+    v-if="supportsCharacterSourceImport"
+    v-model="isCharacterSourceImportOpen"
+    @created="handleCharacterSourceCreated"
   />
 
   <!-- Background decoration -->

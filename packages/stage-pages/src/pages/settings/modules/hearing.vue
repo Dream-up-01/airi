@@ -4,16 +4,25 @@ import workletUrl from '@proj-airi/stage-ui/workers/vad/process.worklet?worker&u
 import { errorMessageFromValue } from '@proj-airi/stage-shared'
 import { Alert, ErrorContainer, LevelMeter, RadioCardManySelect, RadioCardSimple, TestDummyMarker, ThresholdMeter, TimeSeriesChart } from '@proj-airi/stage-ui/components'
 import { useAnalytics, useAudioAnalyzer, useAudioRecorder, useVoiceInputSession } from '@proj-airi/stage-ui/composables'
+import { notifyVoiceSettingsChanged, voiceSettingsStorageKeys } from '@proj-airi/stage-ui/services/voice-settings-sync'
 import { useVAD } from '@proj-airi/stage-ui/stores/ai/models/vad'
 import { useAudioContext } from '@proj-airi/stage-ui/stores/audio'
 import { CONFIDENCE_THRESHOLD_DISABLED, useHearingSpeechInputPipeline, useHearingStore } from '@proj-airi/stage-ui/stores/modules/hearing'
-import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
+import {
+  QWEN3_ASR_LOCAL_PROVIDER_ID,
+  SENSEVOICE_LOCAL_PROVIDER_ID,
+  useProvidersStore,
+} from '@proj-airi/stage-ui/stores/providers'
 import { useSettingsAudioDevice } from '@proj-airi/stage-ui/stores/settings'
 import { Button, FieldCheckbox, FieldCombobox, FieldInput, FieldRange } from '@proj-airi/ui'
 import { until } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+
+import DeclaredLocalAsrSwitcher from './components/DeclaredLocalAsrSwitcher.vue'
+import VoiceConversationDiagnosticsPanel from './components/VoiceConversationDiagnosticsPanel.vue'
+import VoiceConversationPreferencesPanel from './components/VoiceConversationPreferencesPanel.vue'
 
 const { t } = useI18n()
 
@@ -34,6 +43,18 @@ const {
 } = storeToRefs(hearingStore)
 const providersStore = useProvidersStore()
 const { configuredTranscriptionProvidersMetadata } = storeToRefs(providersStore)
+const otherConfiguredTranscriptionProvidersMetadata = computed(() => configuredTranscriptionProvidersMetadata.value.filter(metadata => (
+  metadata.id !== QWEN3_ASR_LOCAL_PROVIDER_ID
+  && metadata.id !== SENSEVOICE_LOCAL_PROVIDER_ID
+)))
+
+watch([activeTranscriptionProvider, activeTranscriptionModel, activeCustomModelName], () => {
+  notifyVoiceSettingsChanged([
+    voiceSettingsStorageKeys.activeTranscriptionProvider,
+    voiceSettingsStorageKeys.activeTranscriptionModel,
+    voiceSettingsStorageKeys.activeTranscriptionCustomModel,
+  ])
+})
 
 const { trackProviderClick } = useAnalytics()
 const { stopStream, startStream } = useSettingsAudioDevice()
@@ -48,6 +69,7 @@ const {
   stopStreamingTranscription,
 } = hearingSpeechInputPipeline
 const {
+  finalizesOnVadEnd,
   supportsStreamInput,
   error: transcriptionPipelineError,
 } = storeToRefs(hearingSpeechInputPipeline)
@@ -164,7 +186,8 @@ async function handleSpeechEnd() {
     return
 
   if (shouldUseStreamInput.value) {
-    // For streaming providers, keep the session alive; idle timer will handle teardown.
+    if (finalizesOnVadEnd.value)
+      await stopStreamingTranscription(false, activeTranscriptionProvider.value)
     return
   }
 
@@ -547,6 +570,8 @@ onUnmounted(() => {
 <template>
   <div flex="~ col md:row gap-6">
     <div bg="neutral-100 dark:[rgba(0,0,0,0.3)]" rounded-xl p-4 flex="~ col gap-4" class="h-fit w-full md:w-[40%]">
+      <VoiceConversationPreferencesPanel />
+      <VoiceConversationDiagnosticsPanel />
       <div flex="~ col gap-4">
         <!-- Audio Input Selection -->
         <div>
@@ -573,19 +598,20 @@ onUnmounted(() => {
             </div>
           </div>
           <div max-w-full>
+            <DeclaredLocalAsrSwitcher class="mb-4" />
             <!--
             fieldset has min-width set to --webkit-min-container, in order to use over flow scroll,
             we need to set the min-width to 0.
             See also: https://stackoverflow.com/a/33737340
           -->
             <fieldset
-              v-if="configuredTranscriptionProvidersMetadata.length > 0"
+              v-if="otherConfiguredTranscriptionProvidersMetadata.length > 0"
               flex="~ row gap-4"
               min-w-0 overflow-x-auto scroll-smooth
               role="radiogroup"
             >
               <RadioCardSimple
-                v-for="metadata in configuredTranscriptionProvidersMetadata"
+                v-for="metadata in otherConfiguredTranscriptionProvidersMetadata"
                 :id="metadata.id"
                 :key="metadata.id"
                 v-model="activeTranscriptionProvider"

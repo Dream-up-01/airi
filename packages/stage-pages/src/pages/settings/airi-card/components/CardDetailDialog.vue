@@ -20,6 +20,7 @@ import {
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import CharacterWorldBookEditor from './CharacterWorldBookEditor.vue'
 import DeleteCardDialog from './DeleteCardDialog.vue'
 
 interface Props {
@@ -196,6 +197,14 @@ const tabs = computed<Tab[]>(() => {
       id: 'character',
       label: t('settings.pages.card.character'),
       icon: 'i-solar:user-rounded-linear',
+    })
+  }
+
+  if (selectedCard.value?.characterBook) {
+    availableTabs.push({
+      id: 'worldbook',
+      label: t('settings.pages.card.worldbook.title'),
+      icon: 'i-solar:notebook-bookmark-linear',
     })
   }
 
@@ -411,6 +420,10 @@ function getModuleDisplayValue(value: string | undefined, defaultValue: string |
                   </div>
                 </template>
               </div>
+            </div>
+
+            <div v-if="activeTab === 'worldbook' && selectedCard.characterBook" class="max-h-120 overflow-auto pr-1">
+              <CharacterWorldBookEditor :model-value="selectedCard.characterBook" readonly />
             </div>
 
             <!-- Modules -->

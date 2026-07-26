@@ -7,6 +7,8 @@ import { IconStatusItem, RippleGrid } from '@proj-airi/stage-ui/components'
 import { useAnalytics } from '@proj-airi/stage-ui/composables'
 import { useRippleGridState } from '@proj-airi/stage-ui/composables/use-ripple-grid-state'
 import { useArtistryStore } from '@proj-airi/stage-ui/stores/modules/artistry'
+import { useHearingStore } from '@proj-airi/stage-ui/stores/modules/hearing'
+import { useSpeechStore } from '@proj-airi/stage-ui/stores/modules/speech'
 import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref } from 'vue'
@@ -43,6 +45,10 @@ const router = useRouter()
 const { t } = useI18n()
 const providersStore = useProvidersStore()
 const artistryStore = useArtistryStore()
+const hearingStore = useHearingStore()
+const speechStore = useSpeechStore()
+const { activeTranscriptionProvider } = storeToRefs(hearingStore)
+const { activeSpeechProvider } = storeToRefs(speechStore)
 const { lastClickedIndex, setLastClickedIndex } = useRippleGridState()
 const { trackProviderClick } = useAnalytics()
 
@@ -183,6 +189,14 @@ const providerBlocks = computed(() => {
         })
         .map(provider => ({
           ...provider,
+          // For voice sources the status dot is an exclusive "currently in
+          // use" marker. Health/configuration is shown inside the provider
+          // page and must not make multiple competing models look active.
+          configured: block.id === 'speech'
+            ? provider.id === activeSpeechProvider.value
+            : block.id === 'transcription'
+              ? provider.id === activeTranscriptionProvider.value
+              : provider.configured,
           renderIndex: globalIndex++,
         }))
 

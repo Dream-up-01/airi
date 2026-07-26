@@ -4,6 +4,7 @@ import type { AiriExtension } from '@proj-airi/stage-ui/stores/modules/airi-card
 
 import kebabcase from '@stdlib/string-base-kebabcase'
 
+import { validateCharacterBook } from '@proj-airi/ccc'
 import { isCustomProvidersDisabled } from '@proj-airi/stage-shared'
 import { DEFAULT_ARTISTRY_WIDGET_INSTRUCTION } from '@proj-airi/stage-ui/constants/prompts/artistry-instruction'
 import { useDisplayModelsStore } from '@proj-airi/stage-ui/stores/display-models'
@@ -27,6 +28,7 @@ import {
 import { computed, ref, toRaw, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import CharacterWorldBookEditor from './CharacterWorldBookEditor.vue'
 import CardCreationTabArtistry from './tabs/CardCreationTabArtistry.vue'
 
 interface Props {
@@ -266,6 +268,7 @@ const activeTabId = ref('')
 const tabs: Tab[] = [
   { id: 'identity', label: t('settings.pages.card.creation.identity'), icon: 'i-solar:emoji-funny-square-bold-duotone' },
   { id: 'behavior', label: t('settings.pages.card.creation.behavior'), icon: 'i-solar:chat-round-line-bold-duotone' },
+  { id: 'worldbook', label: t('settings.pages.card.worldbook.title'), icon: 'i-solar:notebook-bookmark-bold-duotone' },
   { id: 'modules', label: t('settings.pages.card.modules'), icon: 'i-solar:widget-4-bold-duotone' },
   { id: 'artistry', label: t('settings.pages.modules.artistry.title'), icon: 'i-solar:gallery-bold-duotone' },
   { id: 'settings', label: t('settings.pages.card.creation.settings'), icon: 'i-solar:settings-bold-duotone' },
@@ -347,6 +350,15 @@ function saveCard(card: Card): boolean {
     showError.value = true
     errorMessage.value = t('settings.pages.card.creation.errors.posthistoryinstructions')
     return false
+  }
+
+  if (rawCard.characterBook) {
+    const result = validateCharacterBook(rawCard.characterBook)
+    if (result.success === false) {
+      showError.value = true
+      errorMessage.value = t('settings.pages.card.worldbook.validation_error', { path: result.errors[0]?.path ?? '$' })
+      return false
+    }
   }
 
   // Validate Artistry JSON if provided
@@ -524,6 +536,12 @@ const cardGreetings = computed({
     card.value.greetings = val || []
   },
 })
+const cardCharacterBook = computed({
+  get: () => card.value.characterBook,
+  set: (value: Card['characterBook']) => {
+    card.value.characterBook = value
+  },
+})
 
 const cardVersion = makeComputed('version')
 const cardSystemPrompt = makeComputed('systemPrompt')
@@ -599,6 +617,9 @@ function getDefaultPlaceholder(defaultValue: string | undefined): string {
               <FieldInput v-model="cardScenario" :label="t('settings.pages.card.scenario')" :single-line="false" :required="true" :description="t('settings.pages.card.creation.fields_info.scenario')" />
               <FieldValues v-model="cardGreetings" :label="t('settings.pages.card.creation.greetings')" :description="t('settings.pages.card.creation.fields_info.greetings')" />
             </div>
+          </div>
+          <div v-else-if="activeTab === 'worldbook'" class="tab-content ml-auto mr-auto w-95%">
+            <CharacterWorldBookEditor v-model="cardCharacterBook" />
           </div>
           <!-- Modules -->
           <div v-else-if="activeTab === 'modules'" class="tab-content ml-auto mr-auto w-95%">

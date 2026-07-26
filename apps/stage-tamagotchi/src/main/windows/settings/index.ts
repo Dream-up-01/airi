@@ -2,7 +2,11 @@ import type { I18n } from '../../libs/i18n'
 import type { WindowAuthManager } from '../../services/airi/auth'
 import type { ServerChannel } from '../../services/airi/channel-server'
 import type { GodotStageManager } from '../../services/airi/godot-stage'
+import type { LocalVoiceServiceManager } from '../../services/airi/local-voice-services'
 import type { McpStdioManager } from '../../services/airi/mcp-servers'
+import type { QwenCloudControlManager } from '../../services/airi/perception/qwen-cloud-control-manager'
+import type { QwenCloudGrantRegistry } from '../../services/airi/perception/qwen-cloud-grant-registry'
+import type { QwenCloudMediaGatewayManager } from '../../services/airi/perception/qwen-cloud-media-gateway-manager'
 import type { AutoUpdater } from '../../services/electron/auto-updater'
 import type { GlobalShortcutService } from '../../services/electron/global-shortcut'
 import type { DevtoolsWindowManager } from '../devtools'
@@ -34,11 +38,15 @@ export function setupSettingsWindowReusableFunc(params: {
   onWindowCreated?: (window: BrowserWindow) => void
   serverChannel: ServerChannel
   godotStageManager: GodotStageManager
+  localVoiceServiceManager: LocalVoiceServiceManager
   mcpStdioManager: McpStdioManager
   i18n: I18n
   windowAuthManager: WindowAuthManager
   globalShortcut: GlobalShortcutService
   spotlightWindow: SpotlightWindowManager
+  qwenCloudControlManager: QwenCloudControlManager
+  qwenCloudGrantRegistry: QwenCloudGrantRegistry
+  qwenCloudMediaGatewayManager: QwenCloudMediaGatewayManager
 }): SettingsWindowManager {
   const rendererBase = baseUrl(resolve(getElectronMainDirname(), '..', 'renderer'))
   const defaultRoute = '/settings'
@@ -75,11 +83,15 @@ export function setupSettingsWindowReusableFunc(params: {
       devtoolsWindow: params.devtoolsWindow,
       serverChannel: params.serverChannel,
       godotStageManager: params.godotStageManager,
+      localVoiceServiceManager: params.localVoiceServiceManager,
       mcpStdioManager: params.mcpStdioManager,
       i18n: params.i18n,
       windowAuthManager: params.windowAuthManager,
       globalShortcut: params.globalShortcut,
       spotlightWindow: params.spotlightWindow,
+      qwenCloudControlManager: params.qwenCloudControlManager,
+      qwenCloudGrantRegistry: params.qwenCloudGrantRegistry,
+      qwenCloudMediaGatewayManager: params.qwenCloudMediaGatewayManager,
     })
 
     await load(window, withHashRoute(rendererBase, currentRoute))

@@ -9,6 +9,7 @@ import { screen } from 'electron'
 
 import { electronOpenOnboarding } from '../../../../shared/eventa'
 import { computeAdjacentPosition } from '../../../windows/shared/display'
+import { trySetWindowPosition } from '../../../windows/shared/window-position'
 
 const ANIMATION_DURATION = 350
 
@@ -19,23 +20,38 @@ function animateWindowTo(
   if (window.isDestroyed())
     return undefined
 
-  const current = window.getBounds()
-  const needsResize = current.width !== target.width || current.height !== target.height
+  if (![target.x, target.y, target.width, target.height].every(Number.isFinite))
+    return undefined
 
-  if (needsResize)
-    window.setSize(target.width, target.height)
+  const targetX = Math.round(target.x)
+  const targetY = Math.round(target.y)
+  const targetWidth = Math.round(target.width)
+  const targetHeight = Math.round(target.height)
+  if (targetWidth < 1 || targetHeight < 1)
+    return undefined
+
+  let current: Rectangle
+  try {
+    current = window.getBounds()
+    const needsResize = current.width !== targetWidth || current.height !== targetHeight
+
+    if (needsResize)
+      window.setSize(targetWidth, targetHeight)
+  }
+  catch {
+    return undefined
+  }
 
   const state = { x: current.x, y: current.y }
 
   return animate(state, {
-    x: target.x,
-    y: target.y,
+    x: targetX,
+    y: targetY,
     duration: ANIMATION_DURATION,
     ease: 'outCubic',
     modifier: utils.round(0),
     onRender: () => {
-      if (!window.isDestroyed())
-        window.setPosition(Math.round(state.x), Math.round(state.y))
+      trySetWindowPosition(window, state.x, state.y)
     },
   })
 }

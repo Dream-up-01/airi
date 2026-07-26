@@ -23,6 +23,7 @@ import { createConfig } from '../../libs/electron/persistence'
 import { createReusableWindow } from '../../libs/electron/window-manager'
 import { mapForBreakpoints, resolutionBreakpoints, widthFrom } from '../shared/display'
 import { setupBaseWindowElectronInvokes, transparentWindowConfig } from '../shared/window'
+import { trySetWindowPosition } from '../shared/window-position'
 
 const captionConfigSchema = object({
   isFollowing: boolean(),
@@ -208,15 +209,8 @@ export function setupCaptionWindowManager(params: {
         ease: 'outCubic',
         modifier: utils.round(0),
         onRender: () => {
-          if (win.isDestroyed())
-            return
-          if (!Number.isFinite(state.x) || !Number.isFinite(state.y))
-            return
-
-          const toX = Math.round(state.x)
-          const toY = Math.round(state.y)
-          lastProgrammaticMoveAt = Date.now()
-          win.setPosition(toX, toY)
+          if (trySetWindowPosition(win, state.x, state.y))
+            lastProgrammaticMoveAt = Date.now()
         },
       })
     }

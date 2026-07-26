@@ -24,11 +24,17 @@ import { z } from 'zod'
 
 import {
   electronApplyServerChannelConfig,
+  electronApproveMinecraftPairing,
   electronGetServerChannelConfig,
   electronGetServerChannelQrPayload,
+  electronListMinecraftPairedDevices,
+  electronListMinecraftPairingRequests,
+  electronRejectMinecraftPairing,
+  electronRevokeMinecraftPairedDevice,
 } from '../../../../shared/eventa'
 import { createConfig } from '../../../libs/electron/persistence'
 import { ensureServerChannelConfigDefaults } from './config'
+import { MinecraftPairingManager } from './minecraft-pairing'
 
 const channelServerConfigSchema = object({
   hostname: optional(string()),
@@ -56,6 +62,7 @@ const channelServerConfigStore = createConfig('server-channel', 'config.json', c
 })
 let serverChannelServiceRegistered = false
 let serverChannelCertificateTrustConfigured = false
+const minecraftPairingManager = new MinecraftPairingManager()
 
 interface ServerChannelCertificateVerifyRequest {
   hostname: string
@@ -144,6 +151,7 @@ async function resolveServerRuntimeOptions(config: ServerOptions): Promise<Serve
     ...getServerRuntimeBaseOptions(),
     auth: {
       token: 'authToken' in config && typeof config.authToken === 'string' ? config.authToken : '',
+      modulePairing: minecraftPairingManager,
     },
     hostname: 'hostname' in config && typeof config.hostname === 'string'
       ? config.hostname || '127.0.0.1'
@@ -356,6 +364,7 @@ async function getOrCreateCertificate() {
 
 export async function setupServerChannel(params: { lifecycle: Lifecycle }): Promise<Server> {
   channelServerConfigStore.setup()
+  minecraftPairingManager.setup()
   configureServerChannelCertificateTrust()
 
   const storedConfig = await getChannelServerConfig()
@@ -394,6 +403,7 @@ export async function setupServerChannel(params: { lifecycle: Lifecycle }): Prom
 
     try {
       await serverChannel.stop()
+      minecraftPairingManager.dispose()
       log.log('WebSocket server closed')
     }
     catch (error) {
@@ -463,6 +473,26 @@ export async function createServerChannelService(params: { serverChannel: Server
   defineInvokeHandler(context, electronGetServerChannelQrPayload, async () => {
     const config = await getChannelServerConfig()
     return getServerChannelQrPayload(config, params.serverChannel)
+  })
+
+  defineInvokeHandler(context, electronListMinecraftPairingRequests, () => {
+    return minecraftPairingManager.listRequests()
+  })
+
+  defineInvokeHandler(context, electronApproveMinecraftPairing, (req) => {
+    return minecraftPairingManager.approve(req.requestId)
+  })
+
+  defineInvokeHandler(context, electronRejectMinecraftPairing, (req) => {
+    return minecraftPairingManager.reject(req.requestId)
+  })
+
+  defineInvokeHandler(context, electronListMinecraftPairedDevices, () => {
+    return minecraftPairingManager.listDevices()
+  })
+
+  defineInvokeHandler(context, electronRevokeMinecraftPairedDevice, (req) => {
+    return minecraftPairingManager.revoke(req.deviceId)
   })
 
   defineInvokeHandler(context, electronApplyServerChannelConfig, async (req) => {

@@ -32,7 +32,15 @@ import { createWindowAuthManagerService } from './services/airi/auth'
 import { setupServerChannel } from './services/airi/channel-server'
 import { setupGodotStageManager } from './services/airi/godot-stage'
 import { setupBuiltInServer } from './services/airi/http-server'
+import { setupLocalVoiceServiceManager } from './services/airi/local-voice-services'
 import { setupMcpStdioManager } from './services/airi/mcp-servers'
+import { setupLocalScreenConsentRegistry } from './services/airi/perception/local-screen-consent-registry'
+import { setupLocalTransformersScreenManager } from './services/airi/perception/local-transformers-screen'
+import { setupQwenCloudControlManager } from './services/airi/perception/qwen-cloud-control-manager'
+import { QwenCloudCostLedgerStore } from './services/airi/perception/qwen-cloud-cost-ledger-store'
+import { setupQwenCloudGrantRegistry } from './services/airi/perception/qwen-cloud-grant-registry'
+import { QwenCloudMediaGatewayManager } from './services/airi/perception/qwen-cloud-media-gateway-manager'
+import { createQwenRealtimeSocketFactory } from './services/airi/perception/qwen-realtime-socket'
 import { setupExtensionHost } from './services/airi/plugins'
 import { setupArtistryBridge } from './services/airi/widgets/artistry-bridge'
 import { setupAutoUpdater } from './services/electron/auto-updater'
@@ -66,6 +74,12 @@ const log = useLogg('main').useGlobalConfig()
 const appUserDataPath = env.APP_USER_DATA_PATH?.trim()
 if (appUserDataPath) {
   app.setPath('userData', appUserDataPath)
+}
+
+// Keep a software-rendering escape hatch for machines and CI/automation
+// environments where Chromium's GPU subprocess cannot initialize.
+if (env.APP_DISABLE_HARDWARE_ACCELERATION === 'true') {
+  app.disableHardwareAcceleration()
 }
 
 // Thanks to [@blurymind](https://github.com/blurymind),
@@ -165,6 +179,28 @@ app.whenReady().then(async () => {
     build: async () => setupMcpStdioManager(),
   })
 
+  const localVoiceServiceManager = injeca.provide('modules:local-voice-service-manager', () => setupLocalVoiceServiceManager())
+  const localScreenConsentRegistry = injeca.provide('modules:local-screen-consent-registry', () => setupLocalScreenConsentRegistry())
+  const localTransformersScreenManager = injeca.provide('modules:local-transformers-screen-manager', () => setupLocalTransformersScreenManager())
+  const qwenCloudCostLedger = injeca.provide('modules:qwen-cloud-cost-ledger', () => new QwenCloudCostLedgerStore())
+  const qwenCloudControlManager = injeca.provide('modules:qwen-cloud-control-manager', {
+    dependsOn: { qwenCloudCostLedger },
+    build: ({ dependsOn }) => setupQwenCloudControlManager({
+      socketFactory: createQwenRealtimeSocketFactory(),
+      costLedger: dependsOn.qwenCloudCostLedger,
+    }),
+  })
+  const qwenCloudGrantRegistry = injeca.provide('modules:qwen-cloud-grant-registry', () => setupQwenCloudGrantRegistry())
+  const qwenCloudMediaGatewayManager = injeca.provide('modules:qwen-cloud-media-gateway-manager', {
+    dependsOn: { qwenCloudControlManager, qwenCloudCostLedger, qwenCloudGrantRegistry },
+    build: ({ dependsOn }) => new QwenCloudMediaGatewayManager({
+      grants: dependsOn.qwenCloudGrantRegistry,
+      socketFactory: createQwenRealtimeSocketFactory(),
+      costLedger: dependsOn.qwenCloudCostLedger,
+      isReady: () => dependsOn.qwenCloudControlManager.status('gateway:readiness').state === 'ready',
+    }),
+  })
+
   const widgetsManager = injeca.provide('windows:widgets', {
     dependsOn: { serverChannel, i18n },
     build: ({ dependsOn }) => setupWidgetsWindowManager(dependsOn),
@@ -210,12 +246,12 @@ app.whenReady().then(async () => {
   })
 
   const settingsWindow = injeca.provide('windows:settings', {
-    dependsOn: { widgetsManager, beatSync, autoUpdater, devtoolsWindow: devtoolsMarkdownStressWindow, serverChannel, godotStageManager, mcpStdioManager, i18n, windowAuthManager, globalShortcut, spotlightWindow },
+    dependsOn: { widgetsManager, beatSync, autoUpdater, devtoolsWindow: devtoolsMarkdownStressWindow, serverChannel, godotStageManager, localVoiceServiceManager, mcpStdioManager, i18n, windowAuthManager, globalShortcut, spotlightWindow, qwenCloudControlManager, qwenCloudGrantRegistry, qwenCloudMediaGatewayManager },
     build: async ({ dependsOn }) => setupSettingsWindowReusableFunc(dependsOn),
   })
 
   const mainWindow = injeca.provide('windows:main', {
-    dependsOn: { settingsWindow, chatWindow, widgetsManager, noticeWindow, beatSync, autoUpdater, serverChannel, godotStageManager, mcpStdioManager, i18n, onboardingWindowManager, windowAuthManager },
+    dependsOn: { settingsWindow, chatWindow, widgetsManager, noticeWindow, beatSync, autoUpdater, serverChannel, godotStageManager, mcpStdioManager, i18n, onboardingWindowManager, windowAuthManager, localScreenConsentRegistry, localTransformersScreenManager, qwenCloudControlManager, qwenCloudGrantRegistry, qwenCloudMediaGatewayManager },
     build: async ({ dependsOn }) => setupMainWindow({
       ...dependsOn,
       onWindowCreated: (window) => {

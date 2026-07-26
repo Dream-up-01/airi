@@ -1,5 +1,7 @@
 export * from './app'
 export * from './auto-updater'
+export * from './characterSource'
+export * from './companionPreset'
 export * from './global-shortcut'
 export * from './powerMonitor'
 export * from './screen'

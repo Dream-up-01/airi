@@ -52,6 +52,29 @@ export const electronGetServerChannelConfig = defineInvokeEventa<ElectronServerC
 export const electronApplyServerChannelConfig = defineInvokeEventa<ElectronServerChannelConfig, Partial<ElectronServerChannelConfig>>('eventa:invoke:electron:server-channel:apply-config')
 export const electronGetServerChannelQrPayload = defineInvokeEventa<ServerChannelQrPayload>('eventa:invoke:electron:server-channel:get-qr-payload')
 
+export interface MinecraftPairingRequest {
+  requestId: string
+  deviceId: string
+  displayName: string
+  clientVersion: string
+  verificationCode: string
+  expiresAt: number
+}
+
+export interface MinecraftPairedDevice {
+  deviceId: string
+  displayName: string
+  clientVersion: string
+  fingerprint: string
+  pairedAt: number
+}
+
+export const electronListMinecraftPairingRequests = defineInvokeEventa<MinecraftPairingRequest[]>('eventa:invoke:electron:minecraft-pairing:list-requests')
+export const electronApproveMinecraftPairing = defineInvokeEventa<boolean, { requestId: string }>('eventa:invoke:electron:minecraft-pairing:approve')
+export const electronRejectMinecraftPairing = defineInvokeEventa<boolean, { requestId: string }>('eventa:invoke:electron:minecraft-pairing:reject')
+export const electronListMinecraftPairedDevices = defineInvokeEventa<MinecraftPairedDevice[]>('eventa:invoke:electron:minecraft-pairing:list-devices')
+export const electronRevokeMinecraftPairedDevice = defineInvokeEventa<boolean, { deviceId: string }>('eventa:invoke:electron:minecraft-pairing:revoke')
+
 export type ElectronUpdaterChannel = 'latest' | 'stable' | 'alpha' | 'beta' | 'nightly' | 'canary'
 
 export interface ElectronUpdaterPreferences {
@@ -61,6 +84,11 @@ export interface ElectronUpdaterPreferences {
 export const electronGetUpdaterPreferences = defineInvokeEventa<ElectronUpdaterPreferences>('eventa:invoke:electron:auto-updater:get-preferences')
 export const electronSetUpdaterPreferences = defineInvokeEventa<ElectronUpdaterPreferences, ElectronUpdaterPreferences>('eventa:invoke:electron:auto-updater:set-preferences')
 
+export * from './characterSource'
+export * from './perception'
+export * from './perception-cloud'
+export * from './perception-local-screen'
+export * from './perception-local-screen-consent'
 export * from './plugin/assets'
 export * from './plugin/capabilities'
 export * from './plugin/host'
@@ -358,6 +386,33 @@ export const electronGetWindowLifecycleState = defineInvokeEventa<ElectronWindow
 export const electronWindowSetAlwaysOnTop = defineInvokeEventa<void, boolean>('eventa:invoke:electron:window:set-always-on-top')
 export const electronAppOpenUserDataFolder = defineInvokeEventa<{ path: string }>('eventa:invoke:electron:app:open-user-data-folder')
 export const electronAppQuit = defineInvokeEventa<void>('eventa:invoke:electron:app:quit')
+
+/**
+ * Sanitized companion preset file returned by Electron main.
+ */
+export interface ElectronCompanionPresetFile {
+  /** UTF-8 file content after size and encoding validation. */
+  content: string
+  /** Basename only; absolute paths never cross into the renderer. */
+  fileName: string
+}
+
+/** Expected file-boundary failures that the renderer can localize safely. */
+export type ElectronCompanionPresetFileErrorCode
+  = | 'file_changed_too_large'
+    | 'file_too_large'
+    | 'invalid_utf8'
+    | 'read_failed'
+    | 'stat_failed'
+    | 'unsupported_extension'
+
+/** Result envelope returned by the settings-window companion preset picker. */
+export type ElectronCompanionPresetPickResult
+  = | { status: 'cancelled' }
+    | { error: ElectronCompanionPresetFileErrorCode, status: 'error' }
+    | { file: ElectronCompanionPresetFile, status: 'selected' }
+
+export const electronCompanionPresetPickFile = defineInvokeEventa<ElectronCompanionPresetPickResult>('eventa:invoke:electron:companion-preset:pick-file')
 
 export type ElectronGodotStageState = 'stopped' | 'starting' | 'running' | 'stopping' | 'error'
 

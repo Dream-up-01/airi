@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-vue'
 import { createI18n } from 'vue-i18n'
+import { createMemoryHistory, createRouter } from 'vue-router'
 
 import PerceptionControlSurface from './PerceptionControlSurface.vue'
 
@@ -250,6 +251,35 @@ function testI18n() {
   })
 }
 
+// Found by code review 2026-07-26 (M2/M3 follow-up review)
+//
+// ROOT CAUSE:
+//
+// `PerceptionControlSurface.vue` gained a deep-link reader —
+// `const route = useRoute()` plus `route.query[perceptionSourceQueryParam]`
+// evaluated during `setup` — while every case here rendered the component with
+// only the i18n plugin installed. `useRoute()` is `inject(routeLocationKey)`
+// with no default (vue-router 5.0.4,
+// `node_modules/vue-router/dist/useApi-C8XBqGtv.js:196`), so without a router
+// it resolves to `undefined` and `route.query` throws
+// `TypeError: Cannot read properties of undefined` before the surface mounts —
+// every case in this file would fail at `render`.
+//
+// We fixed this in the test rather than in the component: production always
+// renders this surface under the renderer router (`pages/settings/modules/
+// perception.vue` and `components/stage-islands/controls-island/
+// ControlsIslandPerception.vue` are both routed), so a memory-history router
+// is what the real environment provides.
+function testRouter() {
+  return createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/', component: { template: '<div />' } },
+      { path: '/settings/modules/perception', component: { template: '<div />' } },
+    ],
+  })
+}
+
 describe('perception control surface', () => {
   beforeEach(() => {
     mocks.screen.status.value.state = 'idle'
@@ -273,7 +303,7 @@ describe('perception control surface', () => {
 
   it('exposes Minecraft as a first-class source with explicit session consent', async () => {
     const screen = await render(PerceptionControlSurface, {
-      global: { plugins: [testI18n()] },
+      global: { plugins: [testI18n(), testRouter()] },
     })
 
     await screen.getByRole('button', { name: 'Minecraft' }).click()
@@ -293,7 +323,7 @@ describe('perception control surface', () => {
     mocks.minecraft.perceptionEnabled = true
 
     const screen = await render(PerceptionControlSurface, {
-      global: { plugins: [testI18n()] },
+      global: { plugins: [testI18n(), testRouter()] },
     })
     await screen.getByRole('button', { name: 'Pause all perception' }).click()
 
@@ -305,7 +335,7 @@ describe('perception control surface', () => {
   it('keeps consent controls read-only while another renderer owns perception', async () => {
     mocks.minecraftContext.hasRemoteOwner.value = true
     const screen = await render(PerceptionControlSurface, {
-      global: { plugins: [testI18n()] },
+      global: { plugins: [testI18n(), testRouter()] },
     })
 
     await screen.getByRole('button', { name: 'Minecraft' }).click()
@@ -315,7 +345,7 @@ describe('perception control surface', () => {
 
   it('shows cloud policy as inert until external readiness is verified', async () => {
     const screen = await render(PerceptionControlSurface, {
-      global: { plugins: [testI18n()] },
+      global: { plugins: [testI18n(), testRouter()] },
     })
 
     await screen.getByRole('button', { name: 'Cloud' }).click()
@@ -326,7 +356,7 @@ describe('perception control surface', () => {
 
   it('confirms that a cloud configuration check completed without enabling uploads', async () => {
     const screen = await render(PerceptionControlSurface, {
-      global: { plugins: [testI18n()] },
+      global: { plugins: [testI18n(), testRouter()] },
     })
 
     await screen.getByRole('button', { name: 'Cloud' }).click()
@@ -334,5 +364,24 @@ describe('perception control surface', () => {
 
     expect(mocks.cloud.validate).toHaveBeenCalledOnce()
     await expect.element(screen.getByText('Configuration check completed. Cloud upload remains off.')).toBeVisible()
+  })
+
+  // The router is not incidental scaffolding: the pairing notification opens
+  // the settings window on `perceptionSettingsRoute(...)` and the surface picks
+  // its tab from that query. Pinning it here keeps the router a stated
+  // dependency instead of something a later edit could drop again.
+  it('preselects the tab a deep link asks for', async () => {
+    const router = testRouter()
+    // The cloud tab stands in for any deep-linked tab here: it is the one
+    // panel that mounts without an Electron ipcRenderer, so this case measures
+    // the query handling rather than the renderer environment.
+    await router.push('/settings/modules/perception?source=cloud&pairingRequest=req-1')
+    await router.isReady()
+
+    const screen = await render(PerceptionControlSurface, {
+      global: { plugins: [testI18n(), router] },
+    })
+
+    await expect.element(screen.getByRole('heading', { name: 'Qwen cloud perception' })).toBeVisible()
   })
 })

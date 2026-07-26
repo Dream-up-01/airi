@@ -1,12 +1,20 @@
 <script setup lang="ts">
+import type { PerceptionSourceKind } from '../../../shared/perceptionDeepLink'
+
 import { computed, onMounted, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 
 import CloudPerceptionPolicyPanel from './CloudPerceptionPolicyPanel.vue'
 import LocalCameraPerceptionPanel from './LocalCameraPerceptionPanel.vue'
 import LocalScreenPerceptionPanel from './LocalScreenPerceptionPanel.vue'
 import MinecraftPerceptionPanel from './MinecraftPerceptionPanel.vue'
 
+import {
+  pairingRequestQueryParam,
+  perceptionSourceQueryParam,
+  resolvePerceptionSourceKind,
+} from '../../../shared/perceptionDeepLink'
 import { useLocalCameraPerception } from '../../composables/perception/use-local-camera-perception'
 import { useLocalScreenPerception } from '../../composables/perception/use-local-screen-perception'
 import { useMinecraftPerception } from '../../composables/perception/use-minecraft-perception'
@@ -21,10 +29,16 @@ const qwenCloudControl = useQwenCloudControl()
 const qwenCloudPerception = useQwenCloudPerception()
 const minecraftStore = minecraftPerception.store
 const { t } = useI18n()
+const route = useRoute()
 const selectedSourceId = shallowRef('')
 const consentConfirmed = shallowRef(false)
 const cameraConsentConfirmed = shallowRef(false)
-const activeSourceKind = shallowRef<'screen' | 'camera' | 'minecraft' | 'cloud'>('screen')
+// Out-of-band surfaces (the pairing notification) deep-link here with the tab
+// they need. The main stage window renders the same surface without any query,
+// so an absent or unknown value keeps the previous default.
+const activeSourceKind = shallowRef<PerceptionSourceKind>(
+  resolvePerceptionSourceKind(route.query[perceptionSourceQueryParam]) ?? 'screen',
+)
 const isPausingAll = shallowRef(false)
 const cloudValidationCompleted = shallowRef(false)
 const cloudScreenSourceId = shallowRef('')
@@ -60,6 +74,20 @@ watch(() => qwenCloudPerception.cameraStatus.value.captureState, (state) => {
     cloudCameraConsentConfirmed.value = false
 })
 
+// A deep link that arrives while this surface is already mounted must still move
+// the tab. Deliberately not `immediate`: the initial value is applied once above,
+// so only a *new* deep link overrides a tab the user picked manually. The pairing
+// request id is part of the key because two notifications for different requests
+// otherwise produce the same query and would not trigger navigation at all.
+watch(
+  () => [route.query[perceptionSourceQueryParam], route.query[pairingRequestQueryParam]],
+  ([source]) => {
+    const kind = resolvePerceptionSourceKind(source)
+    if (kind)
+      selectSourceKind(kind)
+  },
+)
+
 async function startScreen(sourceId: string, confirmed: boolean): Promise<void> {
   await perception.start(sourceId, confirmed)
   if (perception.status.value.state === 'running')
@@ -82,7 +110,7 @@ async function stopCamera(): Promise<void> {
   cameraConsentConfirmed.value = false
 }
 
-function selectSourceKind(kind: 'screen' | 'camera' | 'minecraft' | 'cloud'): void {
+function selectSourceKind(kind: PerceptionSourceKind): void {
   activeSourceKind.value = kind
   if (kind === 'screen' && perception.sources.value.length === 0)
     void perception.refreshSources()

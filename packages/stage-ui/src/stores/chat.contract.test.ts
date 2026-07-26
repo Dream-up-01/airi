@@ -581,10 +581,55 @@ describe('chat orchestrator contract', () => {
     expect(fakeTtsSegments.join('')).toBe('我在，慢慢说。')
     expect(fakePlaybackCount).toBe(1)
     expect(voiceStore.state).toBe('listening')
-    expect(useVoiceStyleRuntimeStore().policyForTurn('voice-turn-1')).toEqual({
+    expect(useVoiceStyleRuntimeStore().policyForSegment({ turnId: 'voice-turn-1', sessionId: undefined })).toEqual({
       risk: 'none',
       scenario: 'casual',
     })
+  })
+
+  // Found by code review 2026-07-26 (M2 voice review)
+  // ROOT CAUSE:
+  //
+  // chat.ts only called `capturePolicy` when `voiceSession.activeTurnId` was
+  // set at prompt-composition time. A crisis policy evaluated while the voice
+  // session was between turns (interrupt/stop clears activeTurnId) was
+  // therefore never stored in the voice style runtime, and Stage.vue's TTS
+  // resolution fell back to risk 'none' — the crisis prosody clamp failed
+  // open.
+  //
+  // We fixed this by unconditionally capturing a session-scoped policy
+  // whenever a companion card is active and a voice session exists, which
+  // Stage.vue uses as fallback when no turn-scoped policy is available.
+  it('captures a session-scoped voice policy even when no voice turn is active', async () => {
+    activeCardRef.value = {
+      extensions: {
+        airi: {
+          companion: { promptSections: [] },
+          modules: {},
+        },
+      },
+    }
+    llmStreamMock.mockImplementationOnce(async (_model, _provider, _messages, options) => {
+      await options.onStreamEvent({ type: 'text-delta', text: '安全回应。' })
+      await options.onStreamEvent({ type: 'finish', finishReason: 'stop' })
+    })
+
+    const voiceStore = useVoiceConversationStore()
+    voiceStore.start({ sessionId: 'voice-session-2', mode: 'streaming-asr', listeningImmediately: true, now: 10 })
+    // No `speech-start` is dispatched, so the session has no active turn —
+    // the exact state after a user interrupt clears `activeTurnId`.
+    expect(voiceStore.activeTurnId).toBeUndefined()
+
+    const store = useChatOrchestratorStore()
+    await store.ingest('我现在想伤害自己。', {
+      chatProvider: provider,
+      model: 'gpt-test',
+      input: { type: 'input:text', data: { text: 'voice transcript' } },
+    })
+
+    const runtime = useVoiceStyleRuntimeStore()
+    expect(runtime.policyForSegment({ turnId: undefined, sessionId: 'voice-session-2' })).toEqual({ risk: 'crisis', scenario: 'crisis' })
+    expect(runtime.policyForSegment({ turnId: undefined, sessionId: undefined })).toBeUndefined()
   })
 
   it('keeps spoken prompt injection and high-risk text inside M1 turn policy', async () => {

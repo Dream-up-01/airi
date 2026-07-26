@@ -130,6 +130,7 @@ export class LocalCameraPerceptionCoordinator {
   readonly #onFrame?: (frame: ProductionCameraFrame) => void
   #run?: ActiveCameraRun
   #operation?: Promise<void>
+  #stopRequest?: 'stop' | 'pause'
   #status: LocalCameraPerceptionStatus = createInitialStatus()
 
   constructor(options: LocalCameraPerceptionCoordinatorOptions) {
@@ -157,6 +158,7 @@ export class LocalCameraPerceptionCoordinator {
       return this.#fail('camera-capture-busy')
     if (!consentConfirmed)
       return this.#fail('permission-denied')
+    this.#stopRequest = undefined
     this.#setStatus({ ...createInitialStatus(), state: 'starting', analyzers: { mediapipe: 'starting', opencv: 'starting', yolo: 'starting' } })
 
     const operation = this.#startRun(processingMode)
@@ -172,6 +174,7 @@ export class LocalCameraPerceptionCoordinator {
   }
 
   async pause(): Promise<LocalCameraPerceptionStatus> {
+    await this.#interruptPendingStart('pause')
     if (!this.#run)
       return this.status
     this.#setStatus({ state: 'stopping' })
@@ -187,6 +190,7 @@ export class LocalCameraPerceptionCoordinator {
   }
 
   async stop(): Promise<LocalCameraPerceptionStatus> {
+    await this.#interruptPendingStart('stop')
     if (!this.#run) {
       this.#setStatus({
         state: 'idle',
@@ -233,6 +237,25 @@ export class LocalCameraPerceptionCoordinator {
       return
     run.manager.revokeAll('user-retracted')
     this.#publishManager(run.manager)
+  }
+
+  /**
+   * Hands a stop/pause request over to a start() that is still initializing.
+   *
+   * #startRun only publishes #run after the camera stream is open and MediaPipe
+   * has loaded, so a caller arriving inside that window has nothing to tear down
+   * yet. Record the request and wait for the start to finish releasing itself,
+   * otherwise stop()/pause() would return while the camera stays on.
+   */
+  async #interruptPendingStart(kind: 'stop' | 'pause'): Promise<void> {
+    const operation = this.#operation
+    if (!operation || this.#run)
+      return
+    this.#stopRequest = kind
+    // MediaPipe warm-up can take seconds, so surface the pending teardown
+    // instead of leaving the UI on 'starting' until the start finally lands.
+    this.#setStatus({ state: 'stopping' })
+    await operation
   }
 
   async #startRun(processingMode: 'local-only' | 'mixed'): Promise<void> {
@@ -383,6 +406,17 @@ export class LocalCameraPerceptionCoordinator {
       downstream: new PerceptionDownstreamPolicyController(),
     }
     this.#run = run
+    // #run is observable from here on, so a stop()/pause() that arrived while
+    // the camera stream and MediaPipe were still initializing can finally be
+    // served. Take the regular teardown path instead of arming the capture
+    // timer: the camera track (and its indicator light) must not stay on for a
+    // run the user already cancelled.
+    const stopRequest = this.#stopRequest
+    if (stopRequest) {
+      this.#stopRequest = undefined
+      await (stopRequest === 'pause' ? this.pause() : this.stop())
+      return
+    }
     this.#setStatus({
       state: 'running',
       generation: session.session.generation,

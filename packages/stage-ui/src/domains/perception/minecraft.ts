@@ -56,6 +56,22 @@ export type MinecraftPerceptionAdapterResult
   = | { ok: true, event: ObjectivePerceptionEvent }
     | { ok: false, code: MinecraftPerceptionRejectionCode }
 
+// NOTICE:
+// Why: the replay guard below must stay bounded. The adapter is long lived (see
+//   `bindRuntime` in `packages/stage-ui/src/stores/modules/gaming-minecraft.ts`, which
+//   keeps the instance while the module identity is unchanged) and the provider emits
+//   four fresh `nanoid()` ids every 5s
+//   (`services/minecraft/src/airi/minecraft-context-service.ts`,
+//   STATUS_REFRESH_INTERVAL_MS and the four signals in `publishSnapshot`).
+// Root cause: `#seenEventIds` was append-only, so an idle Minecraft session grew the
+//   set by ~69k strings per day inside the renderer process with no upper bound.
+// Source: value and eviction policy mirror `MAX_SEEN_EVENT_IDS` in
+//   `packages/stage-ui/src/domains/perception/state-manager.ts`, so both perception
+//   replay guards keep the same window.
+// Removal condition: drop once the wire protocol carries a provider-side replay window
+//   that makes a receiver-side id set unnecessary.
+const MAX_SEEN_EVENT_IDS = 1_024
+
 const identifier = pipe(string(), minLength(1), maxLength(64), regex(/^[a-z0-9][\w.:-]*$/iu))
 const wireEventSchema = strictObject({
   schemaVersion: literal(MINECRAFT_PERCEPTION_SCHEMA_VERSION),
@@ -141,6 +157,14 @@ export class MinecraftPerceptionAdapter {
       return { ok: false, code: 'rate-limited' }
 
     this.#seenEventIds.add(wire.eventId)
+    // FIFO eviction over the insertion-ordered set. Trade-off: an id older than the
+    // most recent MAX_SEEN_EVENT_IDS accepted ids stops being recognised as a replay.
+    // That is acceptable because `#lastSequence` still rejects every event whose
+    // sequence is not strictly newer, so a genuine re-delivery of an old event is
+    // caught regardless; only a forged reuse of an evicted id carrying a fresh
+    // sequence can pass, and that carries no stale payload.
+    while (this.#seenEventIds.size > MAX_SEEN_EVENT_IDS)
+      this.#seenEventIds.delete(this.#seenEventIds.values().next().value!)
     this.#lastSequence = wire.sequence
     this.#acceptedAt.push(now)
 

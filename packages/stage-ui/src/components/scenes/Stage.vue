@@ -6,7 +6,6 @@ import type { UnElevenLabsOptions } from 'unspeech'
 
 import type { EmotionPayload } from '../../constants/emotions'
 import type { SpeechOutputRoutingProfiles } from '../../domains/speechRouting'
-import type { VoiceStyleDirective } from '../../domains/voiceConversation'
 import type { SpeechTransport, StageTtsSession, StreamingSessionSnapshot } from '../../libs/speech/tts-session'
 
 import { sleep } from '@moeru/std'
@@ -35,7 +34,7 @@ import { useIOTraceBridge } from '../../composables/use-io-trace-bridge'
 import { initIOTracer } from '../../composables/use-io-tracer'
 import { useSpeechPipelineAnalytics } from '../../composables/use-speech-pipeline-analytics'
 import { Emotion, EMOTION_EmotionMotionName_value, EMOTION_VRMExpressionName_value, EmotionThinkMotionName } from '../../constants/emotions'
-import { deriveStageActuationIntentLite, deriveVoiceStyleDirective, voiceStyleCapabilitiesForProvider } from '../../domains/voiceConversation'
+import { applyVoiceStyleToProviderConfig, deriveStageActuationIntentLite, deriveVoiceStyleDirective, hasNumericProsody, voiceStyleCapabilitiesForProvider } from '../../domains/voiceConversation'
 import { getDefaultStreamingModel, getDefinedProvider } from '../../libs/providers/providers'
 import { OFFICIAL_SPEECH_PROVIDER_ID, OFFICIAL_SPEECH_STREAMING_PROVIDER_ID } from '../../libs/providers/providers/official'
 import { bindSpeakingStateToPlaybackManager } from '../../libs/speech/playback-speaking-state'
@@ -194,6 +193,13 @@ interface CapturedSpeechOutputProfile {
   modelId: string
   providerId: string
   voiceId: string
+  /**
+   * Voice session that owned the TTS intent when it was opened, or `undefined`
+   * when no voice session existed then. Snapshotted alongside `context` because
+   * a listening restart mints a new session id while the segments of this
+   * intent are still synthesizing.
+   */
+  voiceSessionId?: string
 }
 
 const speechProfilesByIntent = new Map<string, CapturedSpeechOutputProfile>()
@@ -215,10 +221,12 @@ function captureSpeechOutputProfile(): CapturedSpeechOutputProfile | null {
   const context = voiceConversationStore.activeTurnId
     ? 'voice-conversation'
     : 'text-chat'
+  const voiceSessionId = voiceConversationStore.session?.sessionId
   const routed = speechOutputRoutingStore.profileFor(context)
   if (routed.profile) {
     return {
       context,
+      voiceSessionId,
       ...routed.profile,
     }
   }
@@ -237,6 +245,7 @@ function captureSpeechOutputProfile(): CapturedSpeechOutputProfile | null {
 
   return {
     context,
+    voiceSessionId,
     modelId: activeSpeechModel.value,
     providerId: activeSpeechProvider.value,
     voiceId: activeSpeechVoiceId.value,
@@ -501,15 +510,60 @@ function trackOfficialAutoTtsForTurn(modelId: string) {
 function resolveVoiceStyleForProfile(
   speechProfile: CapturedSpeechOutputProfile,
   modelId: string,
+  turnId: string | undefined,
 ) {
   const voiceSession = voiceConversationStore.session
-  const turnId = voiceSession?.activeTurnId
-  if (!voiceSession || !turnId)
+  // `turnId` is the voice turn snapshotted when the TTS intent was opened
+  // (see `openTtsSession` intentOptions), NOT the live `session.activeTurnId`:
+  // interrupt/stop clears the live id while already-queued segments are still
+  // synthesizing, and those segments must keep the policy (e.g. the crisis
+  // slow/quiet clamp) of the turn that enqueued them.
+  //
+  // A missing snapshot must NOT skip resolution: `intentOptions()` reads that
+  // same live `activeTurnId`, so the snapshot is empty exactly when the
+  // turn-scoped policy is unavailable — an interrupted/stopped session, or
+  // text typed during a voice session. Returning on `!turnId` would hand the
+  // segment the raw provider config and drop the crisis clamp in precisely
+  // the state the session-scoped fallback exists for.
+  //
+  // Session presence alone is NOT a usable gate either: `stop()` only
+  // dispatches a state transition and keeps the session object
+  // (`stores/voiceConversation.ts` `stop`/`reset`; `reset` has no production
+  // caller), so after one voice session every later text-chat segment would
+  // reach this path. Whether a policy was actually captured for this segment
+  // is the real signal — see the `policy` guard below.
+  if (!voiceSession)
+    return
+
+  // The session id is snapshotted exactly like `turnId`, for the same reason:
+  // `replaceVoiceConversationSession` (see
+  // `apps/stage-tamagotchi/src/renderer/pages/index.vue`) starts a brand new
+  // session id on every listening restart, so the live id would look the
+  // session-scoped fallback up under a key that was never captured and the
+  // crisis clamp would fail open mid-restart.
+  //
+  // The live id is only used when the intent was opened outside any voice
+  // session (text chat that a voice session joined afterwards). Applying the
+  // current session's policy there fails closed, which is the safe direction.
+  const sessionId = speechProfile.voiceSessionId ?? voiceSession.sessionId
+  // Turn policy first, then the session-scoped one for turns whose policy was
+  // evaluated while `activeTurnId` was empty (chat.ts captures both).
+  //
+  // No captured policy means this segment is not governed by a companion turn
+  // at all — a plain text chat, or a non-companion card (chat.ts only captures
+  // while `extensions.airi.companion` is set). Deriving a directive anyway
+  // would let `deriveVoiceStyleDirective` fall back to its `'none'/'casual'`
+  // defaults and stamp `voiceStyle` plus the user's rate/pitch onto the
+  // provider config — and, via `hasNumericProsody`, force SSML on a user who
+  // switched it off. Resolve nothing instead: the plain provider path already
+  // carries the user's own speech preferences.
+  const policy = voiceStyleRuntimeStore.policyForSegment({ turnId, sessionId })
+  if (!policy)
     return
 
   const cardSpeechBinding = activeCard.value?.extensions?.airi?.modules?.speech
   const resolution = deriveVoiceStyleDirective({
-    policy: voiceStyleRuntimeStore.policyForTurn(turnId),
+    policy,
     mode: voiceSession.mode,
     speechBinding: {
       rate: cardSpeechBinding?.rate,
@@ -524,34 +578,13 @@ function resolveVoiceStyleForProfile(
 
   voiceStyleRuntimeStore.publishResolution({
     ...resolution,
-    sessionId: voiceSession.sessionId,
+    sessionId,
     turnId,
     providerId: speechProfile.providerId,
     modelId,
     resolvedAt: Date.now(),
   })
   return resolution
-}
-
-function applyVoiceStyleToProviderConfig(
-  providerConfig: Record<string, unknown>,
-  directive: VoiceStyleDirective | undefined,
-  usesSSML: boolean,
-) {
-  if (!directive)
-    return providerConfig
-
-  return {
-    ...providerConfig,
-    speed: directive.rate,
-    pitch: directive.pitchShift,
-    volume: directive.volume === undefined
-      ? undefined
-      : usesSSML
-        ? (directive.volume - 1) * 100
-        : directive.volume,
-    voiceStyle: directive.style,
-  }
 }
 
 const speechPipeline = createSpeechPipeline<AudioBuffer>({
@@ -638,7 +671,7 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
 
     try {
       const supportsSSML = supportsSSMLForProfile(speechProfile)
-      const voiceStyleResolution = resolveVoiceStyleForProfile(speechProfile, model)
+      const voiceStyleResolution = resolveVoiceStyleForProfile(speechProfile, model, request.turnId)
       const speechRequest = speechStore.resolveSpeechInput({
         text: request.text,
         voice,
@@ -647,7 +680,16 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
           voiceStyleResolution?.directive,
           supportsSSML,
         ),
-        forceSSML: supportsSSML && (ssmlEnabled.value || !!voiceStyleResolution),
+        // Overriding the user's SSML setting is only justified when the
+        // directive carries numeric prosody: for an SSML provider, markup is
+        // the only channel that reaches it with rate/pitch/volume. A
+        // style-only directive (study / advice / relationship set no numeric
+        // dimension, and the user's global rate/pitch add none while they sit
+        // at their defaults) would otherwise produce SSML whose
+        // `generateSSML` `hasProsody` branch is false — a bare
+        // `<speak><voice>` wrapper that expresses nothing while taking the
+        // provider off its plain-text path.
+        forceSSML: supportsSSML && (ssmlEnabled.value || hasNumericProsody(voiceStyleResolution?.directive)),
         supportsSSML,
       })
 

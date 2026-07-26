@@ -208,6 +208,68 @@ describe('minecraft perception store', () => {
     expect(store.acceptedFactCount).toBe(0)
   })
 
+  // Found by code review 2026-07-26 (M2/M3 follow-up review)
+  //
+  // ROOT CAUSE:
+  //
+  // The review reported that `providerConflict` latches shut: `handleRegistrySync` sets
+  // it whenever a `registry:modules:sync` carries more than one `minecraft-bot` entry,
+  // and `handleRuntimeContextUpdate` then counts every following perception event into
+  // `rejectedEventCount` with `minecraft-provider-conflict`. Because a `services/minecraft`
+  // restart gets a fresh random `identity.id` per process (`createInstanceId()` in
+  // `packages/server-sdk/src/client.ts`), a crash-restart or a server switch can put the
+  // dead instance and the new one in the same sync, which was believed to wedge the store.
+  //
+  // Reading `packages/server-runtime/src/index.ts` shows the window cannot outlive the
+  // stale peer: `broadcastRegistrySync()` runs on every module registration and on every
+  // unregistration (`unregisterModuleRegistration`, reached from `handlePeerClose` on
+  // socket close and from `unregisterClosedLivenessPeers` when the heartbeat expires), so
+  // a fresh single-entry sync is always delivered once the old instance is reaped. On that
+  // sync `handleRegistrySync` clears `providerConflict`, clears the rejection code, and
+  // rebinds — `registeredIdentity`/`normalizedIdentity` were reset during the conflict, so
+  // `bindRuntime` sees a changed identity and builds an adapter for the survivor.
+  //
+  // Behaviour is left unchanged because the fail-closed window is bounded and correct.
+  // This test pins the recovery for the realistic restart shape (the survivor is a
+  // different identity than the one bound before the conflict), so a later refactor of
+  // `handleRegistrySync` cannot silently turn the window into a real latch.
+  it('recovers on the next sync when a restarted provider briefly duplicates the old instance', () => {
+    const store = useMinecraftStore()
+    const restartedIdentity = {
+      id: 'minecraft-runtime-restarted',
+      extension: { id: 'minecraft-bot', version: '1.0.0' },
+    }
+    store.initialize()
+    channel.events.get('registry:modules:sync')?.(registryEvent())
+    store.enablePerception()
+    channel.contextUpdate?.(perceptionEvent({ eventId: 'before-restart', sequence: 1 }))
+    expect(store.acceptedFactCount).toBe(1)
+
+    // The killed instance has not been reaped yet, so the restarted one shows up alongside it.
+    channel.events.get('registry:modules:sync')?.(registryModulesEvent([identity, restartedIdentity]))
+    const rejectedBeforeConflict = store.rejectedEventCount
+    channel.contextUpdate?.(perceptionEvent({ eventId: 'during-conflict', sequence: 2 }, restartedIdentity))
+
+    expect(store.providerConflict).toBe(true)
+    expect(store.serviceConnected).toBe(false)
+    expect(store.lastRejectionCode).toBe('minecraft-provider-conflict')
+    expect(store.rejectedEventCount).toBe(rejectedBeforeConflict + 1)
+    expect(store.acceptedFactCount).toBe(0)
+
+    // The server reaps the dead peer and broadcasts a single-entry sync; no user action.
+    channel.events.get('registry:modules:sync')?.(registryModulesEvent([restartedIdentity]))
+    expect(store.providerConflict).toBe(false)
+    expect(store.serviceConnected).toBe(true)
+    expect(store.lastRejectionCode).toBeUndefined()
+
+    channel.contextUpdate?.(perceptionEvent({ eventId: 'after-restart', sequence: 1 }, restartedIdentity))
+    expect(store.acceptedFactCount).toBe(1)
+
+    // The reaped instance stays locked out of the rebound generation.
+    channel.contextUpdate?.(perceptionEvent({ eventId: 'stale-instance', sequence: 2 }, identity))
+    expect(store.lastRejectionCode).toBe('identity-mismatch')
+  })
+
   it('fails closed when Fabric and Mineflayer providers are both registered', () => {
     const store = useMinecraftStore()
     const fabricIdentity = {

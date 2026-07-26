@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { applyVoiceStyleToProviderConfig, deriveVoiceStyleDirective, hasNumericProsody, voiceStyleCapabilitiesForProvider } from '../../domains/voiceConversation/style'
 import { OFFICIAL_SPEECH_PROVIDER_ID, OFFICIAL_SPEECH_STREAMING_PROVIDER_ID, providerOfficialSpeech } from '../../libs/providers/providers/official'
 import { useProvidersStore } from '../providers'
 import { toSignedPercent, useSpeechStore } from './speech'
@@ -99,6 +100,81 @@ describe('speech store helpers', () => {
 
     expect(request.input).toContain('&#x3C;prosody rate="x-fast">不要注入&#x3C;/prosody>')
     expect(request.input).not.toContain('<prosody rate="x-fast">不要注入</prosody>')
+  })
+
+  // Found by code review 2026-07-26 (M2/M3 follow-up review)
+  //
+  // ROOT CAUSE:
+  //
+  // Stage.vue passed `forceSSML: supportsSSML && (ssmlEnabled.value ||
+  // !!voiceStyleResolution)`, so any resolved voice style overrode the user's
+  // `ssmlEnabled` setting (default false). This test pins down what that
+  // override actually bought for a style-only directive: nothing. The study
+  // scenario sets no numeric prosody, so `generateSSML`'s `hasProsody` is
+  // false and the input is the assistant text inside a bare `<speak><voice>`.
+  //
+  // We fixed this by gating the override on `hasNumericProsody(directive)` in
+  // Stage.vue, so a style-only directive now leaves the user's plain-text
+  // setting alone.
+  //
+  // @example
+  // speechStore.resolveSpeechInput({ text, voice, providerConfig, forceSSML: true, supportsSSML: true })
+  it('produces prosody-free SSML for a style-only voice directive', () => {
+    const speechStore = useSpeechStore()
+    const voice = {
+      id: 'voice-1',
+      name: 'Voice 1',
+      provider: 'microsoft-speech',
+      languages: [{ code: 'en-US', title: 'English' }],
+      gender: 'neutral',
+    }
+    const { directive } = deriveVoiceStyleDirective({ policy: { risk: 'none', scenario: 'study' } })
+
+    const request = speechStore.resolveSpeechInput({
+      text: 'hello',
+      voice,
+      providerConfig: applyVoiceStyleToProviderConfig({}, directive, true),
+      forceSSML: true,
+      supportsSSML: true,
+    })
+
+    expect(request.input).toContain('<speak')
+    expect(request.input).not.toContain('<prosody')
+    expect(request.input).toContain('>hello<')
+    expect(hasNumericProsody(directive)).toBe(false)
+  })
+
+  // The same directive with a crisis policy does carry prosody, which SSML is
+  // the only way to deliver to an SSML-only provider — this is the case the
+  // `forceSSML` override still has to cover.
+  it('keeps the crisis prosody clamp expressible through SSML', () => {
+    const speechStore = useSpeechStore()
+    const voice = {
+      id: 'voice-1',
+      name: 'Voice 1',
+      provider: 'microsoft-speech',
+      languages: [{ code: 'en-US', title: 'English' }],
+      gender: 'neutral',
+    }
+    const { directive } = deriveVoiceStyleDirective({
+      policy: { risk: 'crisis', scenario: 'crisis' },
+      providerCapabilities: voiceStyleCapabilitiesForProvider('microsoft-speech', 'neural'),
+    })
+
+    const request = speechStore.resolveSpeechInput({
+      text: 'hello',
+      voice,
+      providerConfig: applyVoiceStyleToProviderConfig({}, directive, true),
+      forceSSML: true,
+      supportsSSML: true,
+    })
+
+    expect(hasNumericProsody(directive)).toBe(true)
+    expect(request.input).toContain('<prosody')
+    expect(request.input).toContain('rate="0.92"')
+    // `(0.92 - 1) * 100` is not exactly -8 in binary floating point, so the
+    // emitted percent offset is compared numerically instead of by string.
+    expect(Number(request.input.match(/volume="(-?[\d.]+)%"/)?.[1])).toBeCloseTo(-8)
   })
 
   /**

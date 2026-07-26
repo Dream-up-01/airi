@@ -46,6 +46,14 @@ export interface VoiceStyleResolution {
 export function deriveVoiceStyleDirective(
   options: DeriveVoiceStyleDirectiveOptions = {},
 ): VoiceStyleResolution {
+  // NOTICE:
+  // Missing policy defaults to risk 'none' (fail-open by construction): this
+  // derivation cannot distinguish "no companion policy applies" from "the
+  // policy was lost upstream". The loss cases are mitigated at the call sites:
+  // chat.ts captures both turn-scoped and session-scoped policies, and
+  // Stage.vue resolves with `voiceStyleRuntimeStore.policyForSegment(...)`.
+  // Removal condition: policy becomes a required option once every caller
+  // resolves it through the voice style runtime store.
   const risk: CompanionRiskLevel = options.policy?.risk ?? 'none'
   const scenario: CompanionScenario = options.policy?.scenario ?? 'casual'
   const warnings: VoiceStyleWarning[] = []
@@ -93,6 +101,13 @@ export function deriveVoiceStyleDirective(
     const rate = clampOptional(directive.rate, capabilities.rate)
     const pitchShift = clampOptional(directive.pitchShift, capabilities.pitchShift)
     const volume = clampOptional(directive.volume, capabilities.volume)
+
+    if (rate.stripped || pitchShift.stripped || volume.stripped) {
+      warnings.push({
+        code: 'voice-style.unsupported-prosody',
+        message: 'Provider declares no bounds for some prosody dimensions; those hints were removed.',
+      })
+    }
 
     if (rate.changed) {
       warnings.push({
@@ -241,6 +256,23 @@ export function voiceStyleCapabilitiesForProvider(
     }
   }
 
+  if (providerId === 'gpt-sovits-local') {
+    // NOTICE:
+    // The local GPT-SoVITS bridge only accepts a bounded `speed` parameter:
+    // `services/tts/gpt-sovits-airi/server.py:47` declares
+    // `speed: Optional[float] = Field(default=None, ge=0.5, le=2.0)` and maps
+    // it to `speed_factor` at `server.py:183`. It has no pitch or volume
+    // parameters, so those dimensions intentionally get no bounds here —
+    // `clampOptional` strips unbounded values instead of passing them through.
+    // Removal condition: the bridge grows pitch/volume support, at which
+    // point their real bounds must be declared from the server schema.
+    return {
+      supportsStyle: false,
+      supportsProsody: true,
+      rate: { min: 0.5, max: 2 },
+    }
+  }
+
   return {
     supportsStyle: false,
     supportsProsody: false,
@@ -250,13 +282,90 @@ export function voiceStyleCapabilitiesForProvider(
 function clampOptional(
   value: number | undefined,
   bounds: { min: number, max: number } | undefined,
-): { value: number | undefined, changed: boolean } {
-  if (value == null || !bounds)
-    return { value, changed: false }
+): { value: number | undefined, changed: boolean, stripped: boolean } {
+  if (value == null)
+    return { value, changed: false, stripped: false }
+
+  // NOTICE:
+  // Capability entries only declare bounds for parameters the provider
+  // request actually accepts (e.g. gpt-sovits-local only exposes `speed`).
+  // A missing bounds entry therefore means "this dimension cannot be
+  // honored": passing the value through unclamped would leak an unbounded
+  // prosody hint into the provider config via
+  // `applyVoiceStyleToProviderConfig`, so we fail closed and strip it.
+  // Removal condition: every capability entry declares bounds for every
+  // supported dimension and unsupported dimensions are rejected upstream.
+  if (!bounds)
+    return { value: undefined, changed: false, stripped: true }
 
   const next = Math.min(bounds.max, Math.max(bounds.min, value))
   return {
     value: next,
     changed: next !== value,
+    stripped: false,
   }
+}
+
+/**
+ * Reports whether a directive sets any of the numeric prosody dimensions.
+ *
+ * Use when:
+ * - Deciding whether a request must carry prosody markup (SSML) instead of
+ *   plain text, i.e. whether the resolved delivery can survive without it.
+ *
+ * Expects:
+ * - `directive` straight out of {@link deriveVoiceStyleDirective}; `undefined`
+ *   means no style was resolved for the segment at all.
+ *
+ * Returns:
+ * - `true` only when at least one of `rate` / `pitchShift` / `volume` holds a
+ *   finite number. Style, pace and energy are deliberately excluded: they are
+ *   carried by the provider config (`voiceStyle`), not by prosody markup, so a
+ *   style-only directive gains nothing from being wrapped in SSML.
+ */
+export function hasNumericProsody(directive: VoiceStyleDirective | undefined): boolean {
+  if (!directive)
+    return false
+
+  return Number.isFinite(directive.rate)
+    || Number.isFinite(directive.pitchShift)
+    || Number.isFinite(directive.volume)
+}
+
+/**
+ * Applies a resolved voice style directive onto a speech provider config.
+ *
+ * Use when:
+ * - A TTS request is about to be issued and a `VoiceStyleResolution` exists
+ *   for the segment's voice turn.
+ *
+ * Expects:
+ * - `directive` already passed through {@link deriveVoiceStyleDirective}
+ *   (policy bounds and provider capability clamping applied).
+ * - `usesSSML` reflects whether the provider consumes SSML, where volume is
+ *   expressed as a percent offset (0.92 → -8) instead of a linear factor.
+ *
+ * Returns:
+ * - A new config with only the dimensions the directive actually sets
+ *   overridden; user-configured `speed`/`pitch`/`volume` values survive when
+ *   the directive omits that dimension. The same config object is returned
+ *   untouched when there is no directive.
+ */
+export function applyVoiceStyleToProviderConfig(
+  providerConfig: Record<string, unknown>,
+  directive: VoiceStyleDirective | undefined,
+  usesSSML: boolean,
+): Record<string, unknown> {
+  if (!directive)
+    return providerConfig
+
+  const next: Record<string, unknown> = { ...providerConfig, voiceStyle: directive.style }
+  if (directive.rate != null)
+    next.speed = directive.rate
+  if (directive.pitchShift != null)
+    next.pitch = directive.pitchShift
+  if (directive.volume != null)
+    next.volume = usesSSML ? (directive.volume - 1) * 100 : directive.volume
+
+  return next
 }

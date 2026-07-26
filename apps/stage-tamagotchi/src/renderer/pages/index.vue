@@ -816,7 +816,24 @@ async function retryVoiceRecoveryDraft() {
   if (!draft || !voiceRecoveryDraftStore.beginRetry())
     return
 
-  voiceConversationStore.dispatch({ type: 'chat-retry', turnId: draft.turnId })
+  // Found by code review 2026-07-26 (M2 voice review): `dispatch` never
+  // throws — on a rejected transition (e.g. `stale_turn` after a provider
+  // switch replaced the session and detached `activeTurnId`) it keeps the
+  // previous session and only records the failure in `lastTransitionError`;
+  // it returns `null` solely when no session exists at all
+  // (`packages/stage-ui/src/stores/voiceConversation.ts:77-91`). Ignoring the
+  // result sent the retry as if the voice turn were re-attached while the
+  // session/UI correlation was already broken.
+  const sessionAfterRetryDispatch = voiceConversationStore.dispatch({ type: 'chat-retry', turnId: draft.turnId })
+  const voiceTurnReattached = sessionAfterRetryDispatch !== null
+    && voiceConversationStore.lastTransitionError === null
+  if (!voiceTurnReattached) {
+    console.warn('[Main Page] Voice turn could not be re-attached for chat retry; sending without voice correlation.', {
+      state: voiceConversationStore.state,
+      errorCode: voiceConversationStore.lastTransitionError?.code,
+    })
+  }
+
   const currentMessages = chatSessionStore.getSessionMessages(draft.sessionId)
   const messageIndexById = draft.failedMessageId
     ? currentMessages.findIndex(message => message.id === draft.failedMessageId)
@@ -844,6 +861,24 @@ async function retryVoiceRecoveryDraft() {
     }
 
     voiceRecoveryDraftStore.clear()
+
+    if (!voiceTurnReattached && enabled.value) {
+      // Degraded retry semantics: the message was still sent (user intent
+      // first), but with no active voice turn none of the turn-scoped
+      // llm/tts/playback events fire (Stage.vue notifiers guard on
+      // `activeTurnId`/`isCurrentTurn`), so the session would otherwise stay
+      // 'stopped'/'failed' while voice mode is still on — contradicting the
+      // UI. Re-open listening via the page's existing recovery pattern
+      // (`discardVoiceRecoveryDraft` and `interruptVoiceConversation` both
+      // call `startVoiceListeningSession(currentVoiceMode.value)` followed by
+      // `resumeAutomaticVoiceInputAfterPlayback()`); the detached session has
+      // no turn left to cancel, so no extra `stop` dispatch is needed, and
+      // `startVoiceListeningSession` is a no-op if the machine is already
+      // listening or busy. The echo gate then times microphone recovery
+      // around the assistant's audible reply.
+      startVoiceListeningSession(currentVoiceMode.value)
+      void resumeAutomaticVoiceInputAfterPlayback()
+    }
   }
   catch (error) {
     const failedMessage = findVoiceUserMessage(
@@ -881,6 +916,26 @@ async function consumeFinalAsrTranscript(
 
   if (shouldIgnoreAutomaticVoiceInput()) {
     console.info('[Main Page] Dropping ASR transcript while assistant playback is active:', { source })
+    // Found by code review 2026-07-26 (M2 voice review): returning without
+    // releasing an already-opened turn left the session stuck in
+    // speech-detected/transcribing with that turn active, so
+    // `canStartAutomaticVoiceTurn()` rejected every future microphone turn.
+    // Releasing here cannot interrupt assistant playback:
+    // - a matching accumulator turn implies the state is
+    //   speech-detected/transcribing: `activeAsrTranscript` is always cleared
+    //   right after the `asr-final` dispatch at the end of this function,
+    //   before `chat-ingested` can move the machine into thinking/speaking;
+    // - `dropActiveVoiceTurnAndResumeListening` only mutates state-machine
+    //   state (the store performs no audio/microphone side effects, see
+    //   `packages/stage-ui/src/stores/voiceConversation.ts:44-50`), and its
+    //   streaming-ASR restart is guarded by `!shouldIgnoreAutomaticVoiceInput()`
+    //   (line 752 above), which evaluates false inside this branch, so the
+    //   microphone stays closed;
+    // - the echo gate derives `assistantResponseActive` solely from the
+    //   'speaking' state (`packages/stage-ui/src/domains/voiceConversation/echo-gate.ts:44`),
+    //   which this stop -> listening release never leaves from.
+    if (activeAsrTranscript.value?.turnId && voiceConversationStore.isCurrentTurn(activeAsrTranscript.value.turnId))
+      await dropActiveVoiceTurnAndResumeListening(mode)
     return
   }
 
@@ -908,6 +963,15 @@ async function consumeFinalAsrTranscript(
 
   if (isRecentDuplicateVoiceFinal(normalizedText)) {
     console.info('[Main Page] Dropping recent duplicate ASR transcript before opening a voice turn:', { source })
+    // Found by code review 2026-07-26 (M2 voice review): when the duplicate
+    // final arrives for a turn that `beginVoiceTurn` already opened (the user
+    // repeats the same short phrase within 2 seconds), a plain return kept the
+    // session in speech-detected/transcribing with that turn active,
+    // `canStartAutomaticVoiceTurn()` stayed false, and no new microphone turn
+    // could ever start. Release the held turn and resume listening exactly
+    // like the other drop branches below.
+    if (activeAsrTranscript.value?.turnId && voiceConversationStore.isCurrentTurn(activeAsrTranscript.value.turnId))
+      await dropActiveVoiceTurnAndResumeListening(mode)
     return
   }
 

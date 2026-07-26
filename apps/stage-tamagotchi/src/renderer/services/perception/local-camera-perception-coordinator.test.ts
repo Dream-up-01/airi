@@ -117,6 +117,74 @@ describe('local camera perception coordinator', () => {
     await coordinator.stop()
   })
 
+  // Found by code review 2026-07-26 (M2/M3 follow-up review)
+  //
+  // ROOT CAUSE:
+  // #startRun() opens the camera stream first and only assigns this.#run after
+  // `await mediaPipe.init(...)` resolves. stop() and pause() both bailed out
+  // with `if (!this.#run) return`, so a stop issued during that initialization
+  // window (MediaPipe model download/warm-up, seconds on a cold start) did
+  // nothing: it reported 'idle' while #startRun kept going, published #run,
+  // armed the 100ms capture timer and left the camera track — and its hardware
+  // indicator light — running for a session the user had already cancelled.
+  //
+  // We fixed this by recording the pending stop/pause request, re-checking it in
+  // #startRun right after this.#run becomes observable, and taking the regular
+  // teardown path (which stops the capture handle and disposes the analyzers)
+  // before the capture timer is armed.
+  it('releases the camera when stop() lands while MediaPipe is still initializing', async () => {
+    const capture = createCapture()
+    const initGate = createInitGate()
+    const openCvDispose = vi.fn()
+    const yoloDispose = vi.fn(async () => undefined)
+    const coordinator = createCoordinator(capture, {
+      createMediaPipe: () => ({ ...createMediaPipe(), init: () => initGate.wait() }),
+      createOpenCv: () => ({ ...createOpenCv(), dispose: openCvDispose }),
+      createYolo: () => ({ ...createYolo(), dispose: yoloDispose }),
+    })
+
+    const starting = coordinator.start(true)
+    await initGate.entered
+    expect(capture.open).toHaveBeenCalledOnce()
+    expect(capture.stop).not.toHaveBeenCalled()
+
+    const stopping = coordinator.stop()
+    expect(coordinator.status.state).toBe('stopping')
+    initGate.open()
+    const stopped = await stopping
+    await starting
+
+    expect(stopped.state).toBe('idle')
+    expect(capture.stop).toHaveBeenCalledOnce()
+    expect(openCvDispose).toHaveBeenCalledOnce()
+    expect(yoloDispose).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(capture.captureFrame).not.toHaveBeenCalled()
+    expect(coordinator.status.state).toBe('idle')
+  })
+
+  it('releases the camera when pause() lands while MediaPipe is still initializing', async () => {
+    const capture = createCapture()
+    const initGate = createInitGate()
+    const coordinator = createCoordinator(capture, {
+      createMediaPipe: () => ({ ...createMediaPipe(), init: () => initGate.wait() }),
+    })
+
+    const starting = coordinator.start(true)
+    await initGate.entered
+
+    const pausing = coordinator.pause()
+    initGate.open()
+    const paused = await pausing
+    await starting
+
+    expect(paused.state).toBe('paused')
+    expect(capture.stop).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(capture.captureFrame).not.toHaveBeenCalled()
+    expect(coordinator.status.state).toBe('paused')
+  })
+
   it('atomically revokes facts and prevents disposed analyzer callbacks from changing paused state', async () => {
     const capture = createCapture()
     const snapshots: Array<{ acceptedFactIds: string[] }> = []
@@ -176,6 +244,25 @@ function createCapture() {
         video: {} as HTMLVideoElement,
       }
     }),
+  }
+}
+
+/** Holds `mediaPipe.init()` open so a test can act inside the start window. */
+function createInitGate() {
+  let release = () => undefined as void
+  let markEntered = () => undefined as void
+  const entered = new Promise<void>((resolve) => {
+    markEntered = resolve
+  })
+  return {
+    entered,
+    open: () => release(),
+    wait: async () => {
+      markEntered()
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+    },
   }
 }
 

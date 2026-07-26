@@ -226,15 +226,27 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
         const policy = evaluateConversationPolicy(messageText)
         companionPoliciesBySession.set(sessionId, policy)
         const voiceSession = voiceConversationStore.session
-        if (voiceSession?.activeTurnId) {
-          voiceStyleRuntimeStore.capturePolicy({
+        if (voiceSession) {
+          const policySnapshot = {
+            risk: policy.risk,
+            scenario: policy.scenario,
+          }
+          // Session-scoped capture is unconditional: the voice session can be
+          // between turns here (interrupt/stop clears `activeTurnId`) while
+          // TTS segments that resolve their style later are still queued.
+          // Stage.vue falls back to this snapshot when no turn-scoped policy
+          // exists, so crisis prosody clamping cannot fail open.
+          voiceStyleRuntimeStore.captureSessionPolicy({
             sessionId: voiceSession.sessionId,
-            turnId: voiceSession.activeTurnId,
-            policy: {
-              risk: policy.risk,
-              scenario: policy.scenario,
-            },
+            policy: policySnapshot,
           })
+          if (voiceSession.activeTurnId) {
+            voiceStyleRuntimeStore.capturePolicy({
+              sessionId: voiceSession.sessionId,
+              turnId: voiceSession.activeTurnId,
+              policy: policySnapshot,
+            })
+          }
         }
         if (policy.risk === 'crisis' || policy.ruleIds.includes('cn-companion.input.prompt-override')) {
           console.info('[Companion Safety] Applied conversation policy', {

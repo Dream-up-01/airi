@@ -18,6 +18,7 @@ import { activeTurnSpan, startSpan } from '../../composables/use-io-tracer'
 import { OFFICIAL_TRANSCRIPTION_PROVIDER_ID } from '../../libs/providers'
 import { useProvidersStore } from '../providers'
 import { streamAliyunTranscription } from '../providers/aliyun/stream-transcription'
+import { QWEN3_ASR_LOCAL_PROVIDER_ID, streamQwen3AsrTranscription } from '../providers/qwen3-asr-local'
 import { streamWebSpeechAPITranscription } from '../providers/web-speech-api'
 
 function errorMessage(err: unknown): string {
@@ -229,6 +230,7 @@ export function resolveTranscriptionFileName(file: File, explicitFileName?: stri
 
 const STREAM_TRANSCRIPTION_EXECUTORS: Record<string, StreamTranscription> = {
   'aliyun-nls-transcription': streamAliyunTranscription,
+  [QWEN3_ASR_LOCAL_PROVIDER_ID]: streamQwen3AsrTranscription,
   [OFFICIAL_TRANSCRIPTION_PROVIDER_ID]: streamAliyunTranscription,
   // Web Speech API is handled specially in transcribeForMediaStream since it works directly with MediaStream
 }
@@ -576,7 +578,7 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
     abortController: AbortController
     result?: HearingTranscriptionResult & { recognition?: any }
     idleTimer?: ReturnType<typeof setTimeout>
-    providerId?: string
+    providerId: string
     callbacks?: {
       onSentenceEnd?: (delta: string) => void
       onSpeechEnd?: (text: string) => void
@@ -615,6 +617,14 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
     }
 
     return providersStore.getTranscriptionFeatures(providerId).supportsStreamInput
+  })
+
+  const finalizesOnVadEnd = computed(() => {
+    const providerId = activeTranscriptionProvider.value
+    if (!providerId)
+      return false
+
+    return providersStore.getTranscriptionFeatures(providerId).finalizesOnVadEnd
   })
 
   const DEFAULT_SAMPLE_RATE = 16000
@@ -734,8 +744,12 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
 
     try {
       const reason = new DOMException(abort ? 'Aborted' : 'Stopped', 'AbortError')
-      // Ensure provider transports (e.g., Aliyun NLS) are signaled to stop over websocket.
-      if (!session.abortController.signal.aborted) {
+      const shouldFinalizeInput = !abort
+        && providersStore.getTranscriptionFeatures(session.providerId).finalizesOnVadEnd
+      // Most streaming transports use AbortSignal as their stop command. Providers that
+      // finalize turns on VAD end must instead receive a clean stream close so they can
+      // flush the last audio chunk and return the authoritative final transcript.
+      if (!shouldFinalizeInput && !session.abortController.signal.aborted) {
         session.abortController.abort(reason)
       }
 
@@ -1091,13 +1105,22 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
               console.error('Error reading text stream:', err)
           }
           finally {
+            let completedText = fullText
+            try {
+              completedText = (await result.text).trim() || fullText
+            }
+            catch {
+              // The reader path already reports unexpected provider errors.
+              // Preserve the last safe partial for shutdown bookkeeping.
+            }
+
             if (asrSpan) {
-              asrSpan.setAttribute(IOAttributes.ASRText, fullText)
+              asrSpan.setAttribute(IOAttributes.ASRText, completedText)
               asrSpan.end()
               asrSpan = undefined
             }
             // Use captured callbacks to avoid cross-session leakage
-            sessionCallbacks.onSpeechEnd?.(fullText)
+            sessionCallbacks.onSpeechEnd?.(completedText)
           }
         })()
       }
@@ -1168,7 +1191,7 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
         const responseSummary = result.mode === 'generate'
           ? describeEmptyTranscriptionResponse(result)
           : 'stream result returned empty text'
-        error.value = `No transcription result returned from provider (${responseSummary})`
+        console.info('[Hearing Pipeline] Ignoring empty transcription result.', { responseSummary })
         return
       }
 
@@ -1186,6 +1209,7 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
     transcribeForRecording,
     transcribeForMediaStream,
     stopStreamingTranscription,
+    finalizesOnVadEnd,
     supportsStreamInput,
   }
 })

@@ -1,15 +1,10 @@
-import type { CommonContentPart } from '@xsai/shared-chat'
-
 import type { VisionWorkloadId } from '../../../composables/vision/use-vision-workloads'
 
 import { errorMessageFrom } from '@moeru/std'
-import { ContextUpdateStrategy } from '@proj-airi/server-sdk'
 import { defineStore, storeToRefs } from 'pinia'
 import { ref } from 'vue'
 
 import { useVisionInference } from '../../../composables/vision'
-import { getVisionWorkload } from '../../../composables/vision/use-vision-workloads'
-import { useModsServerChannelStore } from '../../mods/api/channel-server'
 import { useVisionStore } from './store'
 
 /**
@@ -20,26 +15,18 @@ export interface VisionCapturePayload {
   imageDataUrl: string
   /** Vision workload that describes how the frame should be interpreted. */
   workloadId: VisionWorkloadId
-  /** Optional source identifier used to keep context updates stable per source. */
-  sourceId?: string
-  /** Timestamp recorded when the frame was captured. */
-  capturedAt?: number
-  /** When `true`, publish the inference result into the character context channel. */
-  publishContext?: boolean
-}
-
-function getVisionContextId(payload: Pick<VisionCapturePayload, 'workloadId' | 'sourceId'>) {
-  return payload.sourceId
-    ? `vision:${payload.workloadId}:${payload.sourceId}`
-    : `vision:${payload.workloadId}`
 }
 
 /**
- * Coordinates screen-capture inference and optional context publishing for vision workflows.
+ * Coordinates memory-only screen-capture inference for the legacy Devtools workflow.
  *
  * Use when:
  * - A renderer page captures frames and needs multimodal inference results
- * - Successful results may also need to become context updates for downstream modules
+ * - A developer needs to inspect the provider response locally
+ *
+ * This store deliberately has no context channel dependency. Production perception facts
+ * must enter through PerceptionStateManager; raw frames and free model output cannot be
+ * published to chat, context, telemetry or an export path from this Devtools facade.
  *
  * Expects:
  * - The vision settings store to already contain an active provider and model
@@ -50,10 +37,8 @@ function getVisionContextId(payload: Pick<VisionCapturePayload, 'workloadId' | '
 export const useVisionOrchestratorStore = defineStore('vision-orchestrator', () => {
   const visionStore = useVisionStore()
   const { activeProvider, activeModel } = storeToRefs(visionStore)
-  const modsServerChannelStore = useModsServerChannelStore()
-  const { runVisionInference, lastText } = useVisionInference()
+  const { runVisionInference } = useVisionInference()
 
-  const lastResultText = ref('')
   const lastResultAt = ref<number | null>(null)
   const lastError = ref<string | null>(null)
   const lastWorkloadId = ref<VisionWorkloadId>('screen:interpret')
@@ -73,39 +58,8 @@ export const useVisionOrchestratorStore = defineStore('vision-orchestrator', () 
         workloadId: payload.workloadId,
       })
 
-      lastResultText.value = text
       lastResultAt.value = Date.now()
       lastError.value = null
-
-      if (payload.publishContext) {
-        const workload = getVisionWorkload(payload.workloadId)
-        const content: CommonContentPart[] = [
-          { type: 'text', text },
-          {
-            type: 'image_url',
-            image_url: {
-              url: payload.imageDataUrl,
-            },
-          },
-        ]
-
-        modsServerChannelStore.sendContextUpdate({
-          strategy: ContextUpdateStrategy.ReplaceSelf,
-          contextId: getVisionContextId(payload),
-          text,
-          content,
-          metadata: {
-            module: 'vision',
-            workload: workload.id,
-            workloadLabel: workload.label,
-            sourceId: payload.sourceId,
-            capturedAt: payload.capturedAt,
-            provider: activeProvider.value,
-            model: activeModel.value,
-          },
-        })
-        return { contextUpdates: 1, text }
-      }
 
       return { contextUpdates: 0, text }
     }
@@ -116,12 +70,13 @@ export const useVisionOrchestratorStore = defineStore('vision-orchestrator', () 
   }
 
   function recordError(error: unknown) {
-    lastError.value = errorMessageFrom(error) ?? 'Unknown error'
+    const message = errorMessageFrom(error)
+    lastError.value = message === 'Vision model is not configured'
+      ? message
+      : 'Vision inference failed'
   }
 
   return {
-    lastText,
-    lastResultText,
     lastResultAt,
     lastError,
     lastWorkloadId,

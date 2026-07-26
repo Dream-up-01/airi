@@ -61,10 +61,57 @@ import { createAliyunNLSProvider as createAliyunNlsStreamProvider } from './prov
 import { convertProviderDefinitionsToMetadata } from './providers/converters'
 import { models as elevenLabsModels } from './providers/elevenlabs/list-models'
 import { buildGoogleGeminiSpeechProvider } from './providers/google-gemini-speech'
+import {
+  GPT_SOVITS_LOCAL_DEFAULT_BASE_URL,
+  GPT_SOVITS_LOCAL_DEFAULT_MODEL,
+  GPT_SOVITS_LOCAL_DEFAULT_VOICE,
+  GPT_SOVITS_LOCAL_PROVIDER_ID,
+  normalizeGptSovitsLocalBaseUrl,
+  validateGptSovitsLocalConfig,
+} from './providers/gpt-sovits-local'
+import { createMiniMaxSpeechProvider, normalizeMiniMaxSpeechBaseUrl } from './providers/minimax-speech'
 import { buildOpenAICompatibleProvider } from './providers/openai-compatible-builder'
 import { buildOpenRouterAudioSpeechProvider } from './providers/openrouter/audio-speech'
+import {
+  createQwen3AsrLocalProvider,
+  normalizeQwen3AsrLocalBaseUrl,
+  QWEN3_ASR_LOCAL_DEFAULT_BASE_URL,
+  QWEN3_ASR_LOCAL_DEFAULT_LANGUAGE,
+  QWEN3_ASR_LOCAL_DEFAULT_MODEL,
+  QWEN3_ASR_LOCAL_PROVIDER_ID,
+  validateQwen3AsrLocalConfig,
+} from './providers/qwen3-asr-local'
+import {
+  normalizeSenseVoiceLocalBaseUrl,
+  SENSEVOICE_LOCAL_DEFAULT_BASE_URL,
+  SENSEVOICE_LOCAL_DEFAULT_LANGUAGE,
+  SENSEVOICE_LOCAL_DEFAULT_MODEL,
+  SENSEVOICE_LOCAL_PROVIDER_ID,
+  validateSenseVoiceLocalConfig,
+} from './providers/sensevoice-local'
 import { createWebSpeechAPIProvider } from './providers/web-speech-api'
 import { useSettingsAnalytics } from './settings/analytics'
+
+export {
+  GPT_SOVITS_LOCAL_DEFAULT_BASE_URL,
+  GPT_SOVITS_LOCAL_DEFAULT_MODEL,
+  GPT_SOVITS_LOCAL_DEFAULT_VOICE,
+  GPT_SOVITS_LOCAL_PROVIDER_ID,
+} from './providers/gpt-sovits-local'
+
+export {
+  QWEN3_ASR_LOCAL_DEFAULT_BASE_URL,
+  QWEN3_ASR_LOCAL_DEFAULT_LANGUAGE,
+  QWEN3_ASR_LOCAL_DEFAULT_MODEL,
+  QWEN3_ASR_LOCAL_PROVIDER_ID,
+} from './providers/qwen3-asr-local'
+
+export {
+  SENSEVOICE_LOCAL_DEFAULT_BASE_URL,
+  SENSEVOICE_LOCAL_DEFAULT_LANGUAGE,
+  SENSEVOICE_LOCAL_DEFAULT_MODEL,
+  SENSEVOICE_LOCAL_PROVIDER_ID,
+} from './providers/sensevoice-local'
 
 const ALIYUN_NLS_REGIONS = [
   'cn-shanghai',
@@ -259,6 +306,7 @@ export interface ProviderMetadata {
     supportsGenerate: boolean
     supportsStreamOutput: boolean
     supportsStreamInput: boolean
+    finalizesOnVadEnd?: boolean
   }
   pricing?: ProviderSourcePricing
   deployment?: ProviderSourceDeployment
@@ -438,6 +486,149 @@ export const useProvidersStore = defineStore('providers', () => {
             errors: [],
             reason: '',
             valid: true,
+          }
+        },
+      },
+    }),
+    [QWEN3_ASR_LOCAL_PROVIDER_ID]: {
+      id: QWEN3_ASR_LOCAL_PROVIDER_ID,
+      category: 'transcription',
+      tasks: ['speech-to-text', 'automatic-speech-recognition', 'asr', 'stt', 'streaming-transcription'],
+      nameKey: 'settings.pages.providers.provider.qwen3-asr-local.title',
+      name: 'Qwen3-ASR (Local Streaming)',
+      descriptionKey: 'settings.pages.providers.provider.qwen3-asr-local.description',
+      description: 'True streaming Qwen3-ASR running in the local WSL2 environment.',
+      icon: 'i-lobe-icons:qwen-color',
+      requiresCredentials: false,
+      isAvailableBy: isStageTamagotchi,
+      defaultOptions: () => ({
+        baseUrl: QWEN3_ASR_LOCAL_DEFAULT_BASE_URL,
+        language: QWEN3_ASR_LOCAL_DEFAULT_LANGUAGE,
+        model: QWEN3_ASR_LOCAL_DEFAULT_MODEL,
+      }),
+      transcriptionFeatures: {
+        finalizesOnVadEnd: true,
+        supportsGenerate: false,
+        supportsStreamOutput: true,
+        supportsStreamInput: true,
+      },
+      createProvider: async (config) => {
+        const baseUrl = normalizeQwen3AsrLocalBaseUrl(config.baseUrl)
+        if (!baseUrl)
+          throw new Error('Qwen3-ASR local endpoint is invalid.')
+        const language = typeof config.language === 'string' ? config.language : QWEN3_ASR_LOCAL_DEFAULT_LANGUAGE
+        return createQwen3AsrLocalProvider(baseUrl, language)
+      },
+      capabilities: {
+        listModels: async () => [{
+          id: QWEN3_ASR_LOCAL_DEFAULT_MODEL,
+          name: 'Qwen3-ASR 0.6B (Streaming)',
+          provider: QWEN3_ASR_LOCAL_PROVIDER_ID,
+          description: 'Local vLLM streaming ASR optimized for multilingual speech including Chinese.',
+          contextLength: 4096,
+          deprecated: false,
+        }],
+      },
+      validators: {
+        chatPingCheckAvailable: false,
+        validateProviderConfig: async (config) => {
+          const result = await validateQwen3AsrLocalConfig(config)
+          return {
+            ...result,
+            reason: result.reasonCode
+              ? t(`settings.pages.providers.provider.qwen3-asr-local.settings.validation_${result.reasonCode}`)
+              : result.reason,
+          }
+        },
+      },
+    },
+    [SENSEVOICE_LOCAL_PROVIDER_ID]: buildOpenAICompatibleProvider({
+      id: SENSEVOICE_LOCAL_PROVIDER_ID,
+      name: 'SenseVoice (Local)',
+      nameKey: 'settings.pages.providers.provider.sensevoice-local.title',
+      descriptionKey: 'settings.pages.providers.provider.sensevoice-local.description',
+      icon: 'i-lobe-icons:huggingface',
+      description: 'Local FunASR SenseVoice-Small transcription service.',
+      category: 'transcription',
+      tasks: ['speech-to-text', 'automatic-speech-recognition', 'asr', 'stt'],
+      isAvailableBy: isStageTamagotchi,
+      requiresCredentials: false,
+      defaultOptions: () => ({
+        baseUrl: SENSEVOICE_LOCAL_DEFAULT_BASE_URL,
+        language: SENSEVOICE_LOCAL_DEFAULT_LANGUAGE,
+        model: SENSEVOICE_LOCAL_DEFAULT_MODEL,
+      }),
+      creator: createOpenAI,
+      normalizeBaseUrl: normalizeSenseVoiceLocalBaseUrl,
+      capabilities: {
+        listModels: async () => [{
+          id: SENSEVOICE_LOCAL_DEFAULT_MODEL,
+          name: 'SenseVoice-Small (FunASR)',
+          provider: SENSEVOICE_LOCAL_PROVIDER_ID,
+          description: 'Local multilingual speech recognition optimized for Chinese.',
+          contextLength: 0,
+          deprecated: false,
+        }],
+      },
+      validators: {
+        chatPingCheckAvailable: false,
+        validateProviderConfig: async (config) => {
+          const result = await validateSenseVoiceLocalConfig(config)
+          return {
+            ...result,
+            reason: result.reasonCode
+              ? t(`settings.pages.providers.provider.sensevoice-local.settings.validation_${result.reasonCode}`)
+              : result.reason,
+          }
+        },
+      },
+    }),
+    [GPT_SOVITS_LOCAL_PROVIDER_ID]: buildOpenAICompatibleProvider({
+      id: GPT_SOVITS_LOCAL_PROVIDER_ID,
+      name: 'GPT-SoVITS (Local)',
+      nameKey: 'settings.pages.providers.provider.gpt-sovits-local.title',
+      descriptionKey: 'settings.pages.providers.provider.gpt-sovits-local.description',
+      icon: 'i-lobe-icons:huggingface',
+      description: 'Loopback-only AIRI bridge for the local GPT-SoVITS Firefly voice.',
+      category: 'speech',
+      tasks: ['text-to-speech', 'tts'],
+      isAvailableBy: isStageTamagotchi,
+      requiresCredentials: false,
+      defaultOptions: () => ({
+        baseUrl: GPT_SOVITS_LOCAL_DEFAULT_BASE_URL,
+        model: GPT_SOVITS_LOCAL_DEFAULT_MODEL,
+        voice: GPT_SOVITS_LOCAL_DEFAULT_VOICE,
+      }),
+      creator: createOpenAI,
+      normalizeBaseUrl: normalizeGptSovitsLocalBaseUrl,
+      capabilities: {
+        listModels: async () => [{
+          id: GPT_SOVITS_LOCAL_DEFAULT_MODEL,
+          name: 'Firefly v4 (Local)',
+          provider: GPT_SOVITS_LOCAL_PROVIDER_ID,
+          description: 'Local GPT-SoVITS Firefly voice bound by the loopback bridge.',
+          contextLength: 0,
+          deprecated: false,
+        }],
+        listVoices: async () => [{
+          id: GPT_SOVITS_LOCAL_DEFAULT_VOICE,
+          name: 'AIRI Firefly',
+          provider: GPT_SOVITS_LOCAL_PROVIDER_ID,
+          description: 'Local Firefly reference voice.',
+          previewURL: '',
+          languages: [{ code: 'zh', title: 'Chinese' }],
+          gender: 'neutral',
+        }],
+      },
+      validators: {
+        chatPingCheckAvailable: false,
+        validateProviderConfig: async (config) => {
+          const result = await validateGptSovitsLocalConfig(config)
+          return {
+            ...result,
+            reason: result.reasonCode
+              ? t(`settings.pages.providers.provider.gpt-sovits-local.settings.validation_${result.reasonCode}`)
+              : result.reason,
           }
         },
       },
@@ -1480,110 +1671,11 @@ export const useProvidersStore = defineStore('providers', () => {
       iconColor: 'i-lobe-icons:minimax-color',
       defaultOptions: () => ({
         apiKey: '',
-        baseUrl: 'https://api.minimax.io',
+        // MiniMax documents this endpoint as the lower-TTFA HTTP alternative.
+        // Users can still select the standard endpoint in provider settings.
+        baseUrl: 'https://api-uw.minimax.io',
       }),
-      createProvider: async (config) => {
-        const apiKey = (config.apiKey as string).trim()
-        const baseUrl = ((config.baseUrl as string) || 'https://api.minimax.io').replace(/\/$/, '')
-
-        const provider: SpeechProvider = {
-          speech: () => ({
-            baseURL: `${baseUrl}/v1/`,
-            model: 'speech-2.8-hd',
-            fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
-              if (!init?.body || typeof init.body !== 'string') {
-                throw new Error('Invalid request body')
-              }
-
-              const body = JSON.parse(init.body)
-              const text = body.input as string
-              const voiceId = (body.voice as string) || 'English_Graceful_Lady'
-              const model = (body.model as string) || 'speech-2.8-hd'
-
-              const response = await fetch(`${baseUrl}/v1/t2a_v2`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${apiKey}`,
-                },
-                body: JSON.stringify({
-                  model,
-                  text,
-                  stream: true,
-                  voice_setting: {
-                    voice_id: voiceId,
-                    speed: 1,
-                    vol: 1,
-                    pitch: 0,
-                  },
-                  audio_setting: {
-                    sample_rate: 32000,
-                    bitrate: 128000,
-                    format: 'mp3',
-                    channel: 1,
-                  },
-                }),
-              })
-
-              if (!response.ok || !response.body) {
-                throw new Error(`MiniMax TTS request failed: ${response.status} ${response.statusText}`)
-              }
-
-              // Parse SSE stream and collect hex-encoded audio chunks
-              const reader = response.body.getReader()
-              const decoder = new TextDecoder()
-              const audioChunks: Uint8Array[] = []
-              let buffer = ''
-
-              while (true) {
-                const { done, value } = await reader.read()
-                if (done)
-                  break
-                buffer += decoder.decode(value, { stream: true })
-                const lines = buffer.split('\n')
-                buffer = lines.pop() || ''
-                for (const line of lines) {
-                  if (!line.startsWith('data:'))
-                    continue
-                  const jsonStr = line.slice(5).trim()
-                  if (!jsonStr || jsonStr === '[DONE]')
-                    continue
-                  try {
-                    const eventData = JSON.parse(jsonStr)
-                    const audio = eventData?.data?.audio
-                    // status 2 is the final summary chunk; skip it to avoid duplication
-                    if (audio && eventData?.data?.status !== 2) {
-                      const hexStr = audio as string
-                      const bytes = new Uint8Array(hexStr.length / 2)
-                      for (let i = 0; i < hexStr.length; i += 2) {
-                        bytes[i / 2] = Number.parseInt(hexStr.slice(i, i + 2), 16)
-                      }
-                      audioChunks.push(bytes)
-                    }
-                  }
-                  catch {
-                    // ignore malformed SSE events
-                  }
-                }
-              }
-
-              const totalLength = audioChunks.reduce((sum, chunk) => sum + chunk.length, 0)
-              const combined = new Uint8Array(totalLength)
-              let offset = 0
-              for (const chunk of audioChunks) {
-                combined.set(chunk, offset)
-                offset += chunk.length
-              }
-
-              return new Response(combined.buffer, {
-                status: 200,
-                headers: { 'Content-Type': 'audio/mpeg' },
-              })
-            },
-          }),
-        }
-        return provider
-      },
+      createProvider: async config => createMiniMaxSpeechProvider(config),
       capabilities: {
         listModels: async () => [
           {
@@ -1619,14 +1711,17 @@ export const useProvidersStore = defineStore('providers', () => {
       validators: {
         chatPingCheckAvailable: false,
         validateProviderConfig: (config) => {
+          const apiKey = typeof config.apiKey === 'string' ? config.apiKey.trim() : ''
+          const baseUrl = normalizeMiniMaxSpeechBaseUrl(config.baseUrl)
           const errors = [
-            !config.apiKey && new Error('API key is required.'),
-          ].filter(Boolean)
+            !apiKey && new Error(t('settings.pages.providers.provider.minimax-speech.settings.clone.errors.api-key-required')),
+            !baseUrl && new Error(t('settings.pages.providers.provider.minimax-speech.settings.clone.errors.invalid-endpoint')),
+          ].filter((error): error is Error => Boolean(error))
 
           return {
             errors,
-            reason: errors.filter(e => e).map(e => String(e)).join(', ') || '',
-            valid: !!config.apiKey,
+            reason: errors.map(error => error.message).join(', '),
+            valid: errors.length === 0,
           }
         },
       },
@@ -2795,6 +2890,7 @@ export const useProvidersStore = defineStore('providers', () => {
     const features = metadata?.transcriptionFeatures
 
     return {
+      finalizesOnVadEnd: features?.finalizesOnVadEnd ?? false,
       supportsGenerate: features?.supportsGenerate ?? true,
       supportsStreamOutput: features?.supportsStreamOutput ?? false,
       supportsStreamInput: features?.supportsStreamInput ?? false,

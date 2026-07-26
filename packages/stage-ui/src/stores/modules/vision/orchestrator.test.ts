@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useVisionOrchestratorStore } from './orchestrator'
 import { useVisionStore } from './store'
 
-const sendContextUpdate = vi.fn()
 const runVisionInference = vi.fn()
 
 vi.mock('vue-i18n', () => ({
@@ -15,28 +14,13 @@ vi.mock('vue-i18n', () => ({
 
 vi.mock('../../../composables/vision', () => ({
   useVisionInference: () => ({
-    lastText: { value: '' },
     runVisionInference,
-  }),
-}))
-
-vi.mock('../../../composables/vision/use-vision-workloads', () => ({
-  getVisionWorkload: (id: string) => ({
-    id,
-    label: `Workload ${id}`,
-  }),
-}))
-
-vi.mock('../../mods/api/channel-server', () => ({
-  useModsServerChannelStore: () => ({
-    sendContextUpdate,
   }),
 }))
 
 describe('vision orchestrator', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    sendContextUpdate.mockReset()
     runVisionInference.mockReset()
     runVisionInference.mockResolvedValue('Frame summary')
 
@@ -45,53 +29,30 @@ describe('vision orchestrator', () => {
     visionStore.activeModel = 'mock-model'
   })
 
-  it('reuses a stable context id for repeated ReplaceSelf updates from the same source', async () => {
+  it('keeps raw frames out of Pinia state and never reports a context publication', async () => {
     const store = useVisionOrchestratorStore()
 
-    await store.processCapture({
-      imageDataUrl: 'data:image/jpeg;base64,first',
+    const result = await store.processCapture({
+      imageDataUrl: 'data:image/jpeg;base64,raw-screen-secret',
       workloadId: 'screen:interpret',
-      sourceId: 'screen:0:0',
-      publishContext: true,
     })
 
-    await store.processCapture({
-      imageDataUrl: 'data:image/jpeg;base64,second',
-      workloadId: 'screen:interpret',
-      sourceId: 'screen:0:0',
-      publishContext: true,
-    })
-
-    expect(sendContextUpdate).toHaveBeenCalledTimes(2)
-    expect(sendContextUpdate.mock.calls[0]?.[0]).toMatchObject({
-      contextId: 'vision:screen:interpret:screen:0:0',
-    })
-    expect(sendContextUpdate.mock.calls[1]?.[0]).toMatchObject({
-      contextId: 'vision:screen:interpret:screen:0:0',
-    })
+    expect(result).toEqual({ contextUpdates: 0, text: 'Frame summary' })
+    expect(JSON.stringify(store.$state)).not.toContain('raw-screen-secret')
+    expect(JSON.stringify(store.$state)).not.toContain('imageDataUrl')
   })
 
-  it('partitions context ids by workload when no source id is available', async () => {
+  it('returns the provider result without retaining it in Pinia', async () => {
     const store = useVisionOrchestratorStore()
 
-    await store.processCapture({
-      imageDataUrl: 'data:image/jpeg;base64,first',
-      workloadId: 'screen:interpret',
-      publishContext: true,
-    })
-
-    await store.processCapture({
-      imageDataUrl: 'data:image/jpeg;base64,second',
+    const result = await store.processCapture({
+      imageDataUrl: 'data:image/jpeg;base64,frame',
       workloadId: 'screen:understand',
-      publishContext: true,
     })
 
-    expect(sendContextUpdate.mock.calls[0]?.[0]).toMatchObject({
-      contextId: 'vision:screen:interpret',
-    })
-    expect(sendContextUpdate.mock.calls[1]?.[0]).toMatchObject({
-      contextId: 'vision:screen:understand',
-    })
+    expect(result.contextUpdates).toBe(0)
+    expect(result.text).toBe('Frame summary')
+    expect(JSON.stringify(store.$state)).not.toContain('Frame summary')
   })
 
   it('records inference failures on the store before rethrowing', async () => {

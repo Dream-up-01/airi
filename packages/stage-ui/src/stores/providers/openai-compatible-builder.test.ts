@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { buildOpenAICompatibleProvider } from './openai-compatible-builder'
 
@@ -32,5 +32,24 @@ describe('buildOpenAICompatibleProvider', () => {
       language: 'zh',
       model: 'FunAudioLLM/SenseVoiceSmall',
     })
+  })
+
+  it('uses the provider-specific normalized base URL for runtime requests', async () => {
+    const creator = vi.fn(() => ({ speech: () => ({}) }))
+    const metadata = buildOpenAICompatibleProvider({
+      id: 'test-local-speech',
+      name: 'Test Local Speech',
+      nameKey: 'test.speech.title',
+      description: 'Test local speech provider',
+      descriptionKey: 'test.speech.description',
+      icon: 'i-lobe-icons:openai',
+      category: 'speech',
+      creator,
+      normalizeBaseUrl: value => typeof value === 'string' ? `${value.replace(/\/+$/, '')}/v1/` : undefined,
+    })
+
+    await metadata.createProvider({ apiKey: '', baseUrl: 'http://localhost:9888' })
+
+    expect(creator).toHaveBeenCalledWith('', 'http://localhost:9888/v1/')
   })
 })

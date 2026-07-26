@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { shallowRef } from 'vue'
 
-export type SpeechOutputStopReason = 'manual-chat'
+export type SpeechOutputStopReason = 'manual-chat' | 'provider-switch' | 'voice-interrupt' | 'voice-stop'
 
 /**
  * Represents a user-requested stop-speaking command for the stage output host.
@@ -13,8 +13,14 @@ export interface SpeechOutputStopRequest {
   reason: SpeechOutputStopReason
 }
 
+export interface SpeechOutputStopAcknowledgement {
+  /** The exact request that the Stage audio host has finished draining. */
+  requestId: number
+}
+
 export const useSpeechOutputControlStore = defineStore('speech-output-control', () => {
-  const latestStopRequest = ref<SpeechOutputStopRequest>()
+  const latestStopRequest = shallowRef<SpeechOutputStopRequest>()
+  const latestStopAcknowledgement = shallowRef<SpeechOutputStopAcknowledgement>()
   let nextRequestId = 1
 
   /**
@@ -27,17 +33,31 @@ export const useSpeechOutputControlStore = defineStore('speech-output-control', 
    * - A mounted Stage host is watching {@link latestStopRequest}.
    *
    * Returns:
-   * - Nothing. The latest request is published for the Stage host to consume.
+   * - A monotonic request id that the Stage host acknowledges after draining.
    */
   function requestStopSpeaking(reason: SpeechOutputStopReason) {
+    const id = nextRequestId++
     latestStopRequest.value = {
-      id: nextRequestId++,
+      id,
       reason,
     }
+    return id
+  }
+
+  /** Confirms that the Stage host stopped the active source and drained queued audio. */
+  function acknowledgeStopSpeaking(requestId: number) {
+    if (!Number.isSafeInteger(requestId) || requestId <= 0)
+      return
+    if (latestStopAcknowledgement.value && latestStopAcknowledgement.value.requestId >= requestId)
+      return
+
+    latestStopAcknowledgement.value = { requestId }
   }
 
   return {
+    latestStopAcknowledgement,
     latestStopRequest,
+    acknowledgeStopSpeaking,
     requestStopSpeaking,
   }
 })

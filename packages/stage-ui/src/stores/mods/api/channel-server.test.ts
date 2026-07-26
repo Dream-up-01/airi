@@ -399,4 +399,24 @@ describe('channel-server store reconnect', () => {
     expect(serverSdkMocks.MockClient.instances.length).toBeGreaterThan(1)
     expect(serverSdkMocks.MockClient.instances.at(-1)?.options.token).toBe('rotated-secret')
   })
+
+  it('restarts an in-flight anonymous initialization when the persisted token arrives', async () => {
+    const store = useModsServerChannelStore()
+
+    void store.initialize()
+    expect(serverSdkMocks.MockClient.instances[0].options.token).toBeUndefined()
+
+    store.websocketAuthToken = 'generated-secret'
+    await nextTick()
+
+    const authenticatedClient = serverSdkMocks.MockClient.instances.at(-1)
+    expect(serverSdkMocks.MockClient.instances.length).toBeGreaterThan(1)
+    expect(authenticatedClient?.options.token).toBe('generated-secret')
+
+    const recovered = store.initialize({ token: 'generated-secret' })
+    authenticatedClient?.simulateAuthenticated()
+    await recovered
+
+    expect(store.connected).toBe(true)
+  })
 })

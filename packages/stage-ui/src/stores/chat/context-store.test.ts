@@ -162,6 +162,21 @@ describe('useChatContextStore', () => {
     expect(store.getContextsSnapshot()).toEqual({})
   })
 
+  it('retracts one source from active contexts and history without clearing other sources', () => {
+    const store = useChatContextStore()
+    store.ingestContextMessage(createContextMessage({ id: 'sensor', source: 'sensor' }))
+    store.ingestContextMessage(createContextMessage({ id: 'weather', source: 'weather' }))
+
+    expect(store.retractContextSource('sensor')).toEqual({
+      sourceKey: 'sensor',
+      removedEntries: 1,
+      removedHistoryEntries: 1,
+    })
+    expect(store.activeContexts.sensor).toBeUndefined()
+    expect(store.activeContexts.weather).toHaveLength(1)
+    expect(store.contextHistory.map(message => message.id)).toEqual(['weather'])
+  })
+
   /**
    * @example
    * getContextBucketsSnapshot() returns entryCount, latestCreatedAt, and cloned messages.

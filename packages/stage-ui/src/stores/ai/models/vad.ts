@@ -149,8 +149,12 @@ export function useVAD(workerUrl: string, options?: UseVADOptions) {
       await manager.value.start(stream)
   }
 
+  async function stop() {
+    if (manager.value)
+      await manager.value.stop()
+  }
+
   function dispose() {
-    manager.value?.stop()
     manager.value?.dispose()
     manager.value = undefined
 
@@ -200,6 +204,7 @@ export function useVAD(workerUrl: string, options?: UseVADOptions) {
 
     init,
     start,
+    stop,
     dispose,
   }
 }

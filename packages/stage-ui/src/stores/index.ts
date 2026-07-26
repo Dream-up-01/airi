@@ -1,4 +1,6 @@
 export * from './background'
+export * from './characterBookTokenizer'
+export * from './companion'
 export * from './display-models'
 // NOTICE: `@proj-airi/stage-ui/stores` remains a valid package export path.
 // Keep this barrel file pointing at real store modules so package resolution
@@ -10,4 +12,9 @@ export * from './modules/consciousness'
 export * from './modules/speech'
 export * from './providers'
 export * from './settings'
+export * from './speech-output-routing'
 export * from './voice-packs'
+export * from './voiceConversation'
+export * from './voiceConversationPreferences'
+export * from './voiceConversationRecoveryDraft'
+export * from './voiceStyleRuntime'

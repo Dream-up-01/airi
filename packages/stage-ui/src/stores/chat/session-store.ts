@@ -27,6 +27,7 @@ import { capturePosthogEvent } from '../analytics/posthog'
 import { useAuthStore } from '../auth'
 import { useAiriCardStore } from '../modules/airi-card'
 import { mergeLoadedSessionMessages } from './session-message-merge'
+import { createStoredSystemPrompt } from './systemPrompt'
 
 /**
  * Roles that are eligible to push to the cloud. Wire schema accepts more,
@@ -97,10 +98,6 @@ export const useChatSessionStore = defineStore('chat-session', () => {
   // `pushMessageToCloud post-enqueue` triggers don't double-send.
   let outboxDrainTask: Promise<void> | undefined
 
-  // I know this nu uh, better than loading all language on rehypeShiki
-  const codeBlockSystemPrompt = '- For any programming code block, always specify the programming language that supported on @shikijs/rehype on the rendered markdown, eg. ```python ... ```\n'
-  const mathSyntaxSystemPrompt = '- For any math equation, use LaTeX format, eg: $ x^3 $, always escape dollar sign outside math equation\n'
-
   function getCurrentUserId() {
     return userId.value || 'local'
   }
@@ -164,7 +161,7 @@ export const useChatSessionStore = defineStore('chat-session', () => {
   }
 
   function generateInitialMessageFromPrompt(prompt: string) {
-    const content = codeBlockSystemPrompt + mathSyntaxSystemPrompt + prompt
+    const content = createStoredSystemPrompt(prompt)
 
     return {
       role: 'system',

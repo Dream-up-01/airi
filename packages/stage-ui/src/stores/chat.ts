@@ -2,6 +2,8 @@ import type { ChatOrchestratorRuntimeState, ChatOrchestratorSendOptions, StreamE
 import type { ChatProvider } from '@xsai-ext/providers/utils'
 import type { Message } from '@xsai/shared-chat'
 
+import type { ConversationPolicyResult } from '../domains/companion'
+import type { RuntimePromptSection } from '../domains/prompt'
 import type { ChatHistoryItem } from '../types/chat'
 
 import { createChatOrchestratorRuntime } from '@proj-airi/core-agent'
@@ -9,20 +11,28 @@ import { IOAttributes, IOEvents, IOSpanNames, IOSubsystems } from '@proj-airi/st
 import { nanoid } from 'nanoid'
 import { defineStore, storeToRefs } from 'pinia'
 import { ref, toRaw, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import { useAnalytics } from '../composables'
 import { activeTurnSpan, startSpan } from '../composables/use-io-tracer'
+import { compileCharacterBookPrompt, selectCharacterBookEntries, summarizeCharacterBookWarnings } from '../domains/characterBook'
+import { evaluateConversationPolicy, getCompanionProductSafetySection, inspectCompanionOutput } from '../domains/companion'
+import { compileRuntimePrompt } from '../domains/prompt'
 import { extractMessageText, isCloudSyncableMessage } from '../libs/chat-sync'
+import { useCharacterBookTokenizerStore } from './characterBookTokenizer'
 import { createMinecraftContext } from './chat/context-providers'
 import { useChatContextStore } from './chat/context-store'
 import { useChatSessionStore } from './chat/session-store'
 import { useChatStreamStore } from './chat/stream-store'
+import { CHAT_FORMATTING_SYSTEM_PROMPT } from './chat/systemPrompt'
 import { useContextObservabilityStore } from './devtools/context-observability'
 import { useLLM } from './llm'
 import { useLlmToolsetPromptsStore } from './llm-toolset-prompts'
 import { useAiriCardStore } from './modules/airi-card'
 import { useAutonomousArtistryStore } from './modules/artistry-autonomous'
 import { useConsciousnessStore } from './modules/consciousness'
+import { useVoiceConversationStore } from './voiceConversation'
+import { useVoiceStyleRuntimeStore } from './voiceStyleRuntime'
 
 interface ForkOptions {
   fromSessionId?: string
@@ -44,9 +54,11 @@ function isTextDelta(event: StreamEvent): event is Extract<StreamEvent, { type: 
 export type { QueuedSendSnapshot, ChatOrchestratorSendOptions as SendOptions } from '@proj-airi/core-agent'
 
 export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
+  const { t } = useI18n()
   const llmStore = useLLM()
   const llmToolsetPromptsStore = useLlmToolsetPromptsStore()
   const consciousnessStore = useConsciousnessStore()
+  const characterBookTokenizerStore = useCharacterBookTokenizerStore()
   const artistryAutonomousStore = useAutonomousArtistryStore()
   const { activeModel, activeProvider } = storeToRefs(consciousnessStore)
   const {
@@ -72,8 +84,16 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
   const chatContext = useChatContextStore()
   const cardStore = useAiriCardStore()
   const contextObservability = useContextObservabilityStore()
+  const voiceConversationStore = useVoiceConversationStore()
+  const voiceStyleRuntimeStore = useVoiceStyleRuntimeStore()
   const { activeSessionId } = storeToRefs(chatSession)
   const { streamingMessage } = storeToRefs(chatStream)
+  const companionPoliciesBySession = new Map<string, ConversationPolicyResult>()
+
+  watch([activeProvider, activeModel, () => cardStore.activeCard?.characterBook?.token_budget], ([providerId, modelId, tokenBudget]) => {
+    if (tokenBudget !== undefined)
+      void characterBookTokenizerStore.prepare(providerId, modelId)
+  }, { immediate: true })
 
   const sending = ref(false)
   const pendingQueuedSendCount = ref(0)
@@ -176,14 +196,215 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
     },
     getActiveSessionId: () => activeSessionId.value,
     getActiveProvider: () => activeProvider.value,
-    getSystemPromptSupplement: () => llmToolsetPromptsStore.activeToolsetPrompt,
+    getAssistantOutputReleaseMode: () => cardStore.activeCard?.extensions?.airi?.companion
+      ? 'after-validation'
+      : 'stream',
+    allowBufferedSpecialOutput: ({ special }) => /^<\|ACT[\s:|]/iu.test(special)
+      || /^<\|DELAY:\d+\|>$/iu.test(special),
+    getSystemPromptSupplement: ({ messageText, sessionId, sessionMessages }) => {
+      let beforeCharacter: string | undefined
+      let afterCharacter: string | undefined
+      const characterBook = cardStore.activeCard?.characterBook
+      if (characterBook) {
+        const selection = selectCharacterBookEntries({
+          book: characterBook,
+          conversation: sessionMessages
+            .filter(message => message.role === 'user' || message.role === 'assistant')
+            .map(extractMessageText),
+          countTokens: characterBookTokenizerStore.counter(activeProvider.value, activeModel.value),
+        })
+        const fragments = compileCharacterBookPrompt(selection)
+        beforeCharacter = fragments.beforeCharacter
+        afterCharacter = fragments.afterCharacter
+        if (selection.warnings.length > 0) {
+          console.warn('[Character Book] Selection completed with warnings', {
+            warningCounts: summarizeCharacterBookWarnings(selection.warnings),
+          })
+        }
+      }
+      if (cardStore.activeCard?.extensions?.airi?.companion) {
+        const policy = evaluateConversationPolicy(messageText)
+        companionPoliciesBySession.set(sessionId, policy)
+        const voiceSession = voiceConversationStore.session
+        if (voiceSession?.activeTurnId) {
+          voiceStyleRuntimeStore.capturePolicy({
+            sessionId: voiceSession.sessionId,
+            turnId: voiceSession.activeTurnId,
+            policy: {
+              risk: policy.risk,
+              scenario: policy.scenario,
+            },
+          })
+        }
+        if (policy.risk === 'crisis' || policy.ruleIds.includes('cn-companion.input.prompt-override')) {
+          console.info('[Companion Safety] Applied conversation policy', {
+            risk: policy.risk,
+            ruleIds: policy.ruleIds,
+            scenario: policy.scenario,
+          })
+        }
+      }
+      else {
+        companionPoliciesBySession.delete(sessionId)
+      }
+
+      const productSafety = getCompanionProductSafetySection()
+      const sections: RuntimePromptSection[] = [{
+        id: productSafety.id,
+        slot: 'product-safety',
+        source: productSafety.source,
+        content: productSafety.content,
+      }]
+      if (llmToolsetPromptsStore.activeToolsetPrompt) {
+        sections.push({
+          id: 'active-toolset',
+          slot: 'tool-authority',
+          source: 'llm-toolset-prompts',
+          content: llmToolsetPromptsStore.activeToolsetPrompt,
+        })
+      }
+      if (beforeCharacter) {
+        sections.push({
+          id: 'character-book-before',
+          slot: 'before-character-lore',
+          source: 'active-card.characterBook',
+          content: beforeCharacter,
+        })
+      }
+
+      const companion = cardStore.activeCard?.extensions?.airi?.companion
+      if (cardStore.activeCard) {
+        sections.push({
+          id: 'chat-formatting',
+          slot: 'formatting',
+          source: 'stage-ui:chat-formatting',
+          content: CHAT_FORMATTING_SYSTEM_PROMPT,
+        })
+        if (companion) {
+          sections.push(...companion.promptSections
+            .filter(section => section.id !== 'product-safety')
+            .map(section => ({
+              id: `companion:${section.id}`,
+              slot: 'character' as const,
+              source: section.source,
+              content: section.content,
+            })))
+          const widgetInstruction = cardStore.activeCard.extensions.airi.modules.artistry?.widgetInstruction
+          if (widgetInstruction) {
+            sections.push({
+              id: 'artistry-widget-instruction',
+              slot: 'character',
+              source: 'active-card.extensions.airi.modules.artistry.widgetInstruction',
+              content: widgetInstruction,
+            })
+          }
+        }
+        else {
+          sections.push({
+            id: 'active-card',
+            slot: 'character',
+            source: 'active-card.systemPrompt',
+            content: cardStore.systemPrompt,
+          })
+        }
+      }
+      else {
+        const storedSystemPrompt = sessionMessages.find(message => message.role === 'system')
+        if (storedSystemPrompt) {
+          sections.push({
+            id: 'stored-session-fallback',
+            slot: 'character',
+            source: 'session.system',
+            content: extractMessageText(storedSystemPrompt),
+          })
+        }
+      }
+      if (afterCharacter) {
+        sections.push({
+          id: 'character-book-after',
+          slot: 'after-character-lore',
+          source: 'active-card.characterBook',
+          content: afterCharacter,
+        })
+      }
+      const turnPolicy = companionPoliciesBySession.get(sessionId)?.systemPrompt
+      if (turnPolicy) {
+        sections.push({
+          id: 'conversation-policy',
+          slot: 'turn-policy',
+          source: 'companion-policy',
+          content: turnPolicy,
+        })
+      }
+      const compiledPrompt = compileRuntimePrompt(sections)
+      return {
+        replace: compiledPrompt.text,
+      }
+    },
+    validateAssistantOutput: ({ messageText, sessionId }) => {
+      const policy = companionPoliciesBySession.get(sessionId)
+      companionPoliciesBySession.delete(sessionId)
+      // The policy is captured when this turn is composed. Checking the current
+      // active card here would let a mid-stream character switch bypass or add
+      // companion output policy to the wrong response.
+      if (!policy)
+        return { accepted: true }
+
+      const violations = inspectCompanionOutput(messageText, {
+        characterHistory: policy.ruleIds.includes('cn-companion.truthfulness.character-history'),
+        crisis: policy.risk === 'crisis',
+      })
+      if (violations.length === 0)
+        return { accepted: true }
+
+      const ruleIds = violations.map(violation => violation.ruleId)
+      const hasRelationshipViolation = ruleIds.some(ruleId => [
+        'cn-companion.output.availability-promise',
+        'cn-companion.output.dependency-induction',
+        'cn-companion.output.reality-relationship-replacement',
+      ].includes(ruleId))
+      const hasTruthfulnessViolation = ruleIds.some(ruleId => [
+        'cn-companion.output.character-history-overreach',
+        'cn-companion.output.fabricated-physical-action',
+        'cn-companion.output.fabricated-shared-environment',
+        'cn-companion.output.unavailable-capability-claim',
+        'cn-companion.output.unavailable-timer-claim',
+        'cn-companion.output.untrusted-current-time',
+      ].includes(ruleId))
+
+      let replacementKey = 'stage.chat.companion.safety-replacement'
+      if (policy.risk === 'crisis')
+        replacementKey = 'stage.chat.companion.crisis-safety-replacement'
+      else if (policy.scenario === 'relationship')
+        replacementKey = 'stage.chat.companion.relationship-safety-replacement'
+      else if (hasRelationshipViolation)
+        replacementKey = 'stage.chat.companion.relationship-safety-replacement'
+      else if (ruleIds.includes('cn-companion.output.character-history-overreach'))
+        replacementKey = 'stage.chat.companion.character-history-truthfulness-replacement'
+      else if (hasTruthfulnessViolation && policy.scenario === 'study')
+        replacementKey = 'stage.chat.companion.study-truthfulness-replacement'
+      else if (hasTruthfulnessViolation)
+        replacementKey = 'stage.chat.companion.truthfulness-replacement'
+
+      return {
+        accepted: false,
+        replacementText: t(replacementKey),
+        ruleIds,
+      }
+    },
+    onAssistantOutputRejected: ({ ruleIds }) => {
+      console.warn('[Companion Safety] Replaced assistant output', { action: 'replace', ruleIds })
+    },
     runtimeContextProviders: [
       createMinecraftContext,
     ],
     createId: nanoid,
     unwrapMessage: message => toRaw(message),
     onStateChange: syncRuntimeState,
-    onSendSettled: settleOwnedActiveTurnSpan,
+    onSendSettled: ({ sessionId }) => {
+      companionPoliciesBySession.delete(sessionId)
+      settleOwnedActiveTurnSpan()
+    },
     onTrackFirstMessage: trackFirstMessage,
     onMessageSendStarted: ({ source, model }) => {
       lastSendSource = source
@@ -262,6 +483,9 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
         failure_stage: failureStage,
         error_code: errorCode,
       })
+    },
+    onQueuedSendCancelled: ({ reason }) => {
+      console.info('[Chat] Queued send cancelled', { reason })
     },
     onLifecycle: record => contextObservability.recordLifecycle(record),
     onPromptProjection: payload => contextObservability.capturePromptProjection(payload),

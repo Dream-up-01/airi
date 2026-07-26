@@ -80,6 +80,27 @@ describe('speech store helpers', () => {
     expect(request.input).toContain('pitch="+20%"')
   })
 
+  it('escapes assistant text when generating SSML', () => {
+    const speechStore = useSpeechStore()
+    const voice = {
+      id: 'voice-1',
+      name: 'Voice 1',
+      provider: 'microsoft-speech',
+      languages: [{ code: 'zh-CN', title: 'Chinese' }],
+      gender: 'neutral',
+    }
+
+    const request = speechStore.resolveSpeechInput({
+      text: '你好 <prosody rate="x-fast">不要注入</prosody>',
+      voice,
+      forceSSML: true,
+      supportsSSML: true,
+    })
+
+    expect(request.input).toContain('&#x3C;prosody rate="x-fast">不要注入&#x3C;/prosody>')
+    expect(request.input).not.toContain('<prosody rate="x-fast">不要注入</prosody>')
+  })
+
   /**
    * @example
    * speechStore.resolveSpeechInput({ text, voice, forceSSML: true, supportsSSML: false })

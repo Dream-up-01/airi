@@ -1,4 +1,4 @@
-import type { ContextHistoryEntry, ContextIngestResult, ContextMessage } from '@proj-airi/core-agent'
+import type { ContextHistoryEntry, ContextIngestResult, ContextMessage, ContextRetractResult } from '@proj-airi/core-agent'
 
 import { createContextRegistry } from '@proj-airi/core-agent'
 import { defineStore } from 'pinia'
@@ -6,7 +6,7 @@ import { readonly, ref, toRaw } from 'vue'
 
 import { getEventSourceKey } from '../../utils/event-source'
 
-export type { ContextHistoryEntry, ContextIngestResult } from '@proj-airi/core-agent'
+export type { ContextHistoryEntry, ContextIngestResult, ContextRetractResult } from '@proj-airi/core-agent'
 
 /**
  * UI-facing view of one active context source bucket.
@@ -50,6 +50,12 @@ export const useChatContextStore = defineStore('chat-context', () => {
     syncRegistrySnapshot()
   }
 
+  function retractContextSource(sourceKey: string): ContextRetractResult {
+    const result = registry.retract(sourceKey)
+    syncRegistrySnapshot()
+    return result
+  }
+
   function getContextsSnapshot() {
     return registry.snapshot()
   }
@@ -69,6 +75,7 @@ export const useChatContextStore = defineStore('chat-context', () => {
 
   return {
     ingestContextMessage,
+    retractContextSource,
     resetContexts,
     getContextsSnapshot,
     getContextBucketsSnapshot,

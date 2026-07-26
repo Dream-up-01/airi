@@ -1,5 +1,8 @@
 import type { Card, ccv3 } from '@proj-airi/ccc'
 
+import type { CompanionModelBindingWarning, NormalizedCompanionPreset, PromptSection } from '../../domains/companion'
+
+import { assertCharacterBook, assertCharacterCardV3 } from '@proj-airi/ccc'
 import { useLocalStorageManualReset } from '@proj-airi/stage-shared/composables'
 import { watchDebounced } from '@vueuse/core'
 import { nanoid } from 'nanoid'
@@ -77,6 +80,19 @@ export interface AiriExtension {
       enabled?: boolean
     }
   }
+
+  companion?: {
+    /** Persisted origin used to disable the companion after settings-window restarts. */
+    activation?: {
+      previousActiveCardId: string
+    }
+    /** Non-fatal model fallbacks resolved before activation. */
+    bindingWarnings: CompanionModelBindingWarning[]
+    /** Validated preset retained for deterministic recompilation. */
+    preset: NormalizedCompanionPreset
+    /** Source-addressable prompt sections used to produce `systemPrompt`. */
+    promptSections: PromptSection[]
+  }
 }
 
 export interface AiriCard extends Card {
@@ -85,11 +101,24 @@ export interface AiriCard extends Card {
   } & Card['extensions']
 }
 
+/**
+ * Reversible snapshot captured before one card installation and activation.
+ */
+export interface CardActivationSnapshot {
+  /** Card ID installed by the activation operation. */
+  cardId: string
+  /** Card previously stored at `cardId`, when replacing an existing preset. */
+  previousCard?: AiriCard
+  /** Active card ID before the operation. */
+  previousActiveCardId: string
+}
+
 export const useAiriCardStore = defineStore('airi-card', () => {
   const { t } = useI18n()
 
   const cards = useLocalStorageManualReset<Map<string, AiriCard>>('airi-cards', new Map())
   const activeCardId = useLocalStorageManualReset<string>('airi-card-active-id', 'default')
+  const activationSnapshot = useLocalStorageManualReset<CardActivationSnapshot | undefined>('airi-card-activation-snapshot', undefined)
 
   const activeCard = computed(() => cards.value.get(activeCardId.value))
 
@@ -142,6 +171,84 @@ export const useAiriCardStore = defineStore('airi-card', () => {
 
   const getCard = (id: string) => {
     return cards.value.get(id)
+  }
+
+  /**
+   * Installs one fully prepared card and makes it active as a single synchronous operation.
+   *
+   * Use when:
+   * - An application boundary has completed validation and binding preflight.
+   *
+   * Expects:
+   * - `id` is the stable local card key chosen by the owning lifecycle.
+   *
+   * Returns:
+   * - A snapshot that can restore both a replaced card and the prior active ID.
+   */
+  function upsertAndActivateCard(id: string, card: AiriCard | Card | ccv3.CharacterCardV3): CardActivationSnapshot {
+    const preparedCard = newAiriCard(card)
+    const snapshot: CardActivationSnapshot = {
+      cardId: id,
+      previousCard: cards.value.get(id),
+      previousActiveCardId: activeCardId.value,
+    }
+
+    try {
+      cards.value.set(id, preparedCard)
+      activeCardId.value = id
+      activationSnapshot.value = snapshot
+      return snapshot
+    }
+    catch (error) {
+      if (snapshot.previousCard)
+        cards.value.set(id, snapshot.previousCard)
+      else
+        cards.value.delete(id)
+      activeCardId.value = snapshot.previousActiveCardId
+      throw error
+    }
+  }
+
+  function activateCard(id: string): boolean {
+    if (!cards.value.has(id))
+      return false
+
+    activeCardId.value = id
+    return true
+  }
+
+  /**
+   * Restores a card activation snapshot while guarding against stale active-card state.
+   *
+   * Use when:
+   * - The latest installation must be rolled back, including after store re-creation.
+   *
+   * Expects:
+   * - The installed card is still active and the previous active card still exists.
+   *
+   * Returns:
+   * - `true` when the exact snapshot was restored; otherwise no state is changed.
+   */
+  function restoreCardActivation(snapshot: CardActivationSnapshot): boolean {
+    if (activeCardId.value !== snapshot.cardId)
+      return false
+    if (snapshot.previousActiveCardId === snapshot.cardId && !snapshot.previousCard)
+      return false
+    if (snapshot.previousActiveCardId !== snapshot.cardId && !cards.value.has(snapshot.previousActiveCardId))
+      return false
+
+    if (snapshot.previousCard)
+      cards.value.set(snapshot.cardId, snapshot.previousCard)
+    else
+      cards.value.delete(snapshot.cardId)
+    activeCardId.value = snapshot.previousActiveCardId
+    activationSnapshot.value = undefined
+    return true
+  }
+
+  /** Clears a stale rollback snapshot after a metadata-only recovery path. */
+  function clearCardActivationSnapshot(): void {
+    activationSnapshot.value = undefined
   }
 
   function updateActiveCardModules(patch: (extension: AiriExtension) => Partial<AiriExtension['modules']>) {
@@ -272,13 +379,14 @@ export const useAiriCardStore = defineStore('airi-card', () => {
         },
       },
       agents: existingExtension.agents ?? {},
+      companion: existingExtension.companion,
     }
   }
 
   function newAiriCard(card: Card | ccv3.CharacterCardV3): AiriCard {
     // Handle ccv3 format if needed
     if ('data' in card) {
-      const ccv3Card = card as ccv3.CharacterCardV3
+      const ccv3Card = assertCharacterCardV3(card)
       return {
         name: ccv3Card.data.name,
         version: ccv3Card.data.character_version ?? '1.0.0',
@@ -286,6 +394,7 @@ export const useAiriCardStore = defineStore('airi-card', () => {
         creator: ccv3Card.data.creator ?? '',
         notes: ccv3Card.data.creator_notes ?? '',
         notesMultilingual: ccv3Card.data.creator_notes_multilingual,
+        characterBook: ccv3Card.data.character_book,
         personality: ccv3Card.data.personality ?? '',
         scenario: ccv3Card.data.scenario ?? '',
         greetings: [
@@ -308,17 +417,20 @@ export const useAiriCardStore = defineStore('airi-card', () => {
           : [],
         tags: ccv3Card.data.tags ?? [],
         extensions: {
-          airi: resolveAiriExtension(ccv3Card),
           ...ccv3Card.data.extensions,
+          airi: resolveAiriExtension(ccv3Card),
         },
       }
     }
 
+    if (card.characterBook)
+      assertCharacterBook(card.characterBook)
+
     return {
       ...card,
       extensions: {
-        airi: resolveAiriExtension(card),
         ...card.extensions,
+        airi: resolveAiriExtension(card),
       },
     }
   }
@@ -381,12 +493,14 @@ export const useAiriCardStore = defineStore('airi-card', () => {
   function resetState() {
     activeCardId.reset()
     cards.reset()
+    activationSnapshot.reset()
   }
 
   return {
     cards,
     activeCard,
     activeCardId,
+    activationSnapshot,
     addCard,
     removeCard,
     updateCard,
@@ -395,6 +509,10 @@ export const useAiriCardStore = defineStore('airi-card', () => {
     updateActiveCardSpeech,
     updateActiveCardVision,
     getCard,
+    activateCard,
+    clearCardActivationSnapshot,
+    upsertAndActivateCard,
+    restoreCardActivation,
     resetState,
     initialize,
 
@@ -422,6 +540,13 @@ export const useAiriCardStore = defineStore('airi-card', () => {
       const card = activeCard.value
       if (!card)
         return ''
+
+      if (card.extensions?.airi?.companion) {
+        return [
+          card.systemPrompt,
+          card.extensions.airi.modules.artistry?.widgetInstruction,
+        ].filter(Boolean).join('\n\n')
+      }
 
       const components = [
         card.systemPrompt,

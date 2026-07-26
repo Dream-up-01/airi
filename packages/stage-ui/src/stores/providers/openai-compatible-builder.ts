@@ -72,6 +72,7 @@ export function buildOpenAICompatibleProvider(
     validation?: ProviderValidationCheck[]
     additionalHeaders?: Record<string, string>
     transcriptionFeatures?: ProviderMetadata['transcriptionFeatures']
+    normalizeBaseUrl?: (value: unknown) => string | undefined
   },
 ): ProviderMetadata {
   const {
@@ -90,14 +91,22 @@ export function buildOpenAICompatibleProvider(
     validation,
     additionalHeaders,
     transcriptionFeatures,
+    normalizeBaseUrl: providerBaseUrlNormalizer,
     ...rest
   } = options
+
+  function resolveBaseUrl(value: unknown): string {
+    if (!providerBaseUrlNormalizer)
+      return normalizeBaseUrl(value)
+
+    return providerBaseUrlNormalizer(value) ?? ''
+  }
 
   const defaultCapabilities = {
     listModels: async (config: Record<string, unknown>) => {
       // Safer casting of apiKey/baseUrl (prevents .trim() crash if not a string)
       const apiKey = normalizeString(config.apiKey)
-      const baseUrl = normalizeBaseUrl(config.baseUrl)
+      const baseUrl = resolveBaseUrl(config.baseUrl)
 
       // If not configured yet, avoid remote calls and return empty
       if (!apiKey || !baseUrl) {
@@ -160,7 +169,7 @@ export function buildOpenAICompatibleProvider(
       }
 
       // normalize trailing slash instead of rejecting
-      baseUrl = normalizeBaseUrl(baseUrl)
+      baseUrl = resolveBaseUrl(baseUrl)
 
       if (errors.length > 0) {
         return {
@@ -289,7 +298,9 @@ export function buildOpenAICompatibleProvider(
     }),
     createProvider: async (config: { apiKey: string, baseUrl: string }) => {
       const apiKey = normalizeString(config.apiKey)
-      const baseUrl = normalizeBaseUrl(config.baseUrl)
+      const baseUrl = resolveBaseUrl(config.baseUrl)
+      if (providerBaseUrlNormalizer && !baseUrl)
+        throw new Error('Provider base URL is invalid')
       const provider = await creator(apiKey, baseUrl)
       if (resolvedCategory === 'transcription')
         return withTranscriptionExtraOptions(provider)

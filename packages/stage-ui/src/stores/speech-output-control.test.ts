@@ -27,4 +27,49 @@ describe('speech output control store', () => {
       reason: 'manual-chat',
     })
   })
+
+  it('records voice interruption requests with the same host channel', () => {
+    const store = useSpeechOutputControlStore()
+
+    store.requestStopSpeaking('voice-interrupt')
+
+    expect(store.latestStopRequest).toEqual({
+      id: 1,
+      reason: 'voice-interrupt',
+    })
+  })
+
+  it('records voice stop requests separately from interruption requests', () => {
+    const store = useSpeechOutputControlStore()
+
+    store.requestStopSpeaking('voice-stop')
+
+    expect(store.latestStopRequest).toEqual({
+      id: 1,
+      reason: 'voice-stop',
+    })
+  })
+
+  it('routes provider switches through the same cancellable output host', () => {
+    const store = useSpeechOutputControlStore()
+
+    store.requestStopSpeaking('provider-switch')
+
+    expect(store.latestStopRequest).toEqual({
+      id: 1,
+      reason: 'provider-switch',
+    })
+  })
+
+  it('acknowledges only monotonic completed stop requests', () => {
+    const store = useSpeechOutputControlStore()
+    const firstRequestId = store.requestStopSpeaking('voice-interrupt')
+    const secondRequestId = store.requestStopSpeaking('voice-stop')
+
+    store.acknowledgeStopSpeaking(secondRequestId)
+    store.acknowledgeStopSpeaking(firstRequestId)
+    store.acknowledgeStopSpeaking(0)
+
+    expect(store.latestStopAcknowledgement).toEqual({ requestId: secondRequestId })
+  })
 })

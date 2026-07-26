@@ -12,6 +12,11 @@ interface ScreenCaptureSource extends SerializableDesktopCapturerSource {
   thumbnailURL?: string
 }
 
+export interface VisionScreenCaptureOptions {
+  includeOwnedSources?: boolean
+  onSourceEnded?: (sourceId: string) => void
+}
+
 /**
  * Manages Electron-backed screen-capture sources and the active preview stream for vision workflows.
  *
@@ -26,13 +31,17 @@ interface ScreenCaptureSource extends SerializableDesktopCapturerSource {
  * Returns:
  * - Reactive source lists, active stream state, and helpers for refetching, starting, stopping, and capturing frames
  */
-export function useVisionScreenCapture(sourcesOptions: MaybeRefOrGetter<SourcesOptions>) {
+export function useVisionScreenCapture(
+  sourcesOptions: MaybeRefOrGetter<SourcesOptions>,
+  options: VisionScreenCaptureOptions = {},
+) {
   const sources = ref<ScreenCaptureSource[]>([])
   const isRefetching = ref(false)
   const hasFetchedOnce = ref(false)
   const activeSourceId = ref('')
   const activeStream = shallowRef<MediaStream | null>(null)
   const activeStreamSourceId = ref('')
+  let streamGeneration = 0
 
   watch(activeSourceId, (nextId) => {
     if (activeStreamSourceId.value && activeStreamSourceId.value !== nextId) {
@@ -55,6 +64,11 @@ export function useVisionScreenCapture(sourcesOptions: MaybeRefOrGetter<SourcesO
   }
 
   function clearActiveStream() {
+    streamGeneration += 1
+    releaseActiveStream()
+  }
+
+  function releaseActiveStream() {
     const stream = activeStream.value
     if (!stream) {
       activeStream.value = null
@@ -80,8 +94,10 @@ export function useVisionScreenCapture(sourcesOptions: MaybeRefOrGetter<SourcesO
     stream.getTracks().forEach((track) => {
       track.addEventListener('ended', () => {
         if (activeStream.value === stream && activeStreamSourceId.value === sourceId) {
+          streamGeneration += 1
           activeStream.value = null
           activeStreamSourceId.value = ''
+          options.onSourceEnded?.(sourceId)
         }
       }, { once: true })
     })
@@ -91,6 +107,7 @@ export function useVisionScreenCapture(sourcesOptions: MaybeRefOrGetter<SourcesO
     try {
       isRefetching.value = true
       const nextSources = (await getSources())
+        .filter(source => options.includeOwnedSources || !('ownedByCurrentApp' in source) || source.ownedByCurrentApp !== true)
         .sort((a, b) => {
           const aIsScreen = a.id.startsWith('screen:')
           const bIsScreen = b.id.startsWith('screen:')
@@ -108,7 +125,7 @@ export function useVisionScreenCapture(sourcesOptions: MaybeRefOrGetter<SourcesO
       }))
 
       const hasActiveSource = sources.value.some(source => source.id === activeSourceId.value)
-      const nextActiveSourceId = hasActiveSource ? activeSourceId.value : sources.value[0]?.id || ''
+      const nextActiveSourceId = hasActiveSource ? activeSourceId.value : ''
       activeSourceId.value = nextActiveSourceId
     }
     finally {
@@ -125,7 +142,9 @@ export function useVisionScreenCapture(sourcesOptions: MaybeRefOrGetter<SourcesO
     if (isActiveStream(activeStream.value) && activeStreamSourceId.value === sourceId)
       return activeStream.value!
 
-    clearActiveStream()
+    const generation = streamGeneration + 1
+    streamGeneration = generation
+    releaseActiveStream()
 
     const stream = await selectWithSource(
       () => sourceId,
@@ -134,6 +153,10 @@ export function useVisionScreenCapture(sourcesOptions: MaybeRefOrGetter<SourcesO
     if (!isActiveStream(stream)) {
       stream.getTracks().forEach(track => track.stop())
       throw new Error('Selected source did not provide a live video track')
+    }
+    if (generation !== streamGeneration || activeSourceId.value !== sourceId) {
+      stream.getTracks().forEach(track => track.stop())
+      throw new Error('screen_capture_start_cancelled')
     }
 
     activeStream.value = stream

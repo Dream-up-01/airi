@@ -71,6 +71,8 @@ interface ChatCommandMessage<C extends string = string, P = unknown> {
 interface RetryCommandPayload {
   sessionId?: string
   index: number
+  sourceMessageId?: string
+  replacementText?: string
 }
 
 type ChatResponsePayload
@@ -131,16 +133,20 @@ function getRetryText(message: ChatHistoryItem | undefined): string | null {
   return text || null
 }
 
-function resolveRetrySourceIndex(messages: ChatHistoryItem[], index: number): number {
-  const targetMessage = messages[index]
+function resolveRetrySourceIndex(messages: ChatHistoryItem[], index: number, sourceMessageId?: string): number {
+  const messageIdIndex = sourceMessageId
+    ? messages.findIndex(message => message.id === sourceMessageId)
+    : -1
+  const targetIndex = messageIdIndex >= 0 ? messageIdIndex : index
+  const targetMessage = messages[targetIndex]
   if (!targetMessage)
     return -1
 
   if (targetMessage.role === 'user')
-    return index
+    return targetIndex
 
   if (targetMessage.role === 'assistant' || targetMessage.role === 'error') {
-    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    for (let cursor = targetIndex - 1; cursor >= 0; cursor -= 1) {
       if (messages[cursor]?.role === 'user')
         return cursor
     }
@@ -156,10 +162,12 @@ function previewChatSyncPayload(payload: unknown): unknown {
 
   const record = payload as Record<string, unknown>
   const text = typeof record.text === 'string' ? record.text : undefined
+  const replacementText = typeof record.replacementText === 'string' ? record.replacementText : undefined
 
   return {
     ...record,
-    text: text && text.length > 160 ? `${text.slice(0, 160)}...` : text,
+    text: text ? `[${text.length} characters]` : text,
+    replacementText: replacementText ? `[${replacementText.length} characters]` : replacementText,
     attachments: Array.isArray(record.attachments)
       ? `[${record.attachments.length} attachment(s)]`
       : record.attachments,
@@ -370,11 +378,13 @@ export const useChatSyncStore = defineStore('stage-tamagotchi:chat-sync', () => 
   async function executeRetry(payload: RetryCommandPayload) {
     const sessionId = payload.sessionId || activeSessionId.value
     const currentMessages = chatSession.getSessionMessages(sessionId)
-    const sourceIndex = resolveRetrySourceIndex(currentMessages, payload.index)
+    const sourceIndex = resolveRetrySourceIndex(currentMessages, payload.index, payload.sourceMessageId)
     if (sourceIndex < 0)
       throw new Error('Retry target has no retriable source message')
 
-    const text = getRetryText(currentMessages[sourceIndex])
+    const text = payload.replacementText === undefined
+      ? getRetryText(currentMessages[sourceIndex])
+      : payload.replacementText.trim()
     if (!text)
       throw new Error('Retry target has no retriable user message')
 

@@ -5,6 +5,8 @@ import { themeColorFromValue, useThemeColor } from '@proj-airi/stage-layouts/com
 import { artistrySyncConfig } from '@proj-airi/stage-shared'
 import { ToasterRoot } from '@proj-airi/stage-ui/components'
 import { useInferencePreload } from '@proj-airi/stage-ui/composables'
+import { provideCharacterSourceFileReader } from '@proj-airi/stage-ui/composables/characterSourceFileReader'
+import { CompanionPresetImportError, provideCompanionPresetFileReader } from '@proj-airi/stage-ui/composables/companionPresetFileReader'
 import { useSharedAnalyticsStore } from '@proj-airi/stage-ui/stores/analytics'
 import { useCharacterOrchestratorStore } from '@proj-airi/stage-ui/stores/character'
 import { useChatSessionStore } from '@proj-airi/stage-ui/stores/chat/session-store'
@@ -19,16 +21,24 @@ import { listProvidersForPluginHost, shouldPublishPluginHostCapabilities } from 
 import { useSettings, useSettingsAudioDevice } from '@proj-airi/stage-ui/stores/settings'
 import { useTheme } from '@proj-airi/ui'
 import { storeToRefs } from 'pinia'
-import { onMounted, onUnmounted, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import { toast, Toaster } from 'vue-sonner'
 
+import LocalCameraPerceptionIndicator from './components/perception/LocalCameraPerceptionIndicator.vue'
+import LocalScreenPerceptionIndicator from './components/perception/LocalScreenPerceptionIndicator.vue'
+import MinecraftPerceptionIndicator from './components/perception/MinecraftPerceptionIndicator.vue'
+import PerceptionRemoteStatusIndicator from './components/perception/PerceptionRemoteStatusIndicator.vue'
 import ResizeHandler from './components/ResizeHandler.vue'
 
 import {
+  electronCharacterSourceCancel,
+  electronCharacterSourcePickFile,
+  electronCompanionPresetPickFile,
   electronGetServerChannelConfig,
   electronGodotStageGetStatus,
   electronGodotStageStatusChanged,
+  electronOpenSettings,
   electronSettingsNavigate,
   electronStartTrackMousePosition,
   i18nGetLocale,
@@ -51,12 +61,18 @@ import {
 import { electronPluginToolsChanged } from '../shared/eventa/plugin/tools'
 import { initializeElectronAuthCallbackBridge } from './bridges/electron-auth-callback'
 import { initializeStageThreeRuntimeTraceBridge } from './bridges/stage-three-runtime-trace'
+import { provideLocalCameraPerception } from './composables/perception/use-local-camera-perception'
+import { provideLocalScreenPerception } from './composables/perception/use-local-screen-perception'
+import { provideMinecraftPerception } from './composables/perception/use-minecraft-perception'
+import { provideQwenCloudControl } from './composables/perception/use-qwen-cloud-control'
+import { provideQwenCloudPerception } from './composables/perception/use-qwen-cloud-perception'
 import { useLanguage } from './composables/use-language'
 import { createChatSyncWindowLifecycle, resolveInitialChatSyncRoutePath } from './stores/chat-sync-lifecycle'
 import { useTamagotchiMcpToolsStore } from './stores/mcp-tools'
 import { useTamagotchiPluginToolsStore } from './stores/plugin-tools'
 import { useServerChannelSettingsStore } from './stores/settings/server-channel'
 import { useStageWindowLifecycleStore } from './stores/stage-window-lifecycle'
+import { parseCompanionPresetFile } from './utils/companionPreset'
 
 const { isDark: dark } = useTheme()
 const settingsStore = useSettings()
@@ -67,10 +83,51 @@ const chatSessionStore = useChatSessionStore()
 const context = useElectronEventaContext()
 const getMainLocale = useElectronEventaInvoke(i18nGetLocale)
 const setLocale = useElectronEventaInvoke(i18nSetLocale)
+const pickCompanionPresetFile = useElectronEventaInvoke(electronCompanionPresetPickFile)
+const pickCharacterSourceFile = useElectronEventaInvoke(electronCharacterSourcePickFile)
+const cancelCharacterSourceFile = useElectronEventaInvoke(electronCharacterSourceCancel)
+const openSettings = useElectronEventaInvoke(electronOpenSettings)
 const initialWindowRoutePath = resolveInitialChatSyncRoutePath(route.path)
 const chatSyncLifecycle = createChatSyncWindowLifecycle(route.path)
 const isSpotlightWindowRoute = initialWindowRoutePath === '/spotlight'
 const isSettingsWindowRoute = initialWindowRoutePath.startsWith('/settings')
+const isMainStageWindowRoute = initialWindowRoutePath === '/'
+// Either production surface may own perception, while the shared Web Lock
+// guarantees that only one renderer can hold capture resources at a time.
+const isPerceptionControlWindowRoute = isMainStageWindowRoute || isSettingsWindowRoute
+const localScreenPerception = isPerceptionControlWindowRoute ? provideLocalScreenPerception() : null
+const localCameraPerception = isPerceptionControlWindowRoute ? provideLocalCameraPerception() : null
+const minecraftPerception = isPerceptionControlWindowRoute ? provideMinecraftPerception() : null
+if (isPerceptionControlWindowRoute) {
+  const qwenCloudControl = provideQwenCloudControl()
+  provideQwenCloudPerception(qwenCloudControl, localCameraPerception!)
+}
+const remotePerceptionStatuses = computed(() => localScreenPerception?.remoteStatuses.value ?? [])
+
+provideCompanionPresetFileReader({
+  async pickAndParse() {
+    const result = await pickCompanionPresetFile()
+    if (result.status === 'cancelled')
+      return undefined
+    if (result.status === 'error')
+      throw new CompanionPresetImportError(result.error)
+
+    try {
+      return {
+        sourceName: result.file.fileName,
+        value: parseCompanionPresetFile(result.file),
+      }
+    }
+    catch {
+      throw new CompanionPresetImportError('invalid_format')
+    }
+  },
+})
+
+provideCharacterSourceFileReader({
+  cancel: requestId => cancelCharacterSourceFile({ requestId }),
+  pick: requestId => pickCharacterSourceFile({ requestId }),
+})
 
 function createFullStageRuntime() {
   const contextBridgeStore = useContextBridgeStore()
@@ -213,6 +270,8 @@ function createFullStageRuntime() {
       serverChannelSettingsStore.tlsConfig = serverChannelConfig.tlsConfig ?? null
       serverChannelSettingsStore.hostname = serverChannelConfig.hostname
       serverChannelSettingsStore.authToken = serverChannelConfig.authToken
+      serverChannelStore.websocketAuthToken = serverChannelConfig.authToken
+      await nextTick()
 
       await serverChannelStore.initialize({
         token: serverChannelConfig.authToken || undefined,
@@ -309,6 +368,38 @@ onUnmounted(() => {
     <Toaster />
   </ToasterRoot>
   <ResizeHandler v-if="!isSpotlightWindowRoute" />
+  <div
+    id="stage-status-overlay-stack"
+    class="pointer-events-none fixed left-3 top-3 z-100 max-h-[calc(100vh-1.5rem)] w-[min(22rem,calc(100vw-1.5rem))] flex flex-col items-start gap-2 overflow-y-auto"
+  >
+    <PerceptionRemoteStatusIndicator
+      v-if="remotePerceptionStatuses.length > 0"
+      :statuses="remotePerceptionStatuses"
+    />
+    <LocalScreenPerceptionIndicator
+      v-if="localScreenPerception && ['starting', 'running', 'paused', 'stopping'].includes(localScreenPerception.status.value.state)"
+      :status="localScreenPerception.status.value"
+      @open-details="openSettings({ route: '/settings/modules/perception' })"
+      @pause="localScreenPerception.pause"
+      @stop="localScreenPerception.stop"
+      @toggle-sensitive-pause="localScreenPerception.setSensitiveSurfacePaused"
+    />
+    <LocalCameraPerceptionIndicator
+      v-if="localCameraPerception && ['starting', 'running', 'paused', 'stopping'].includes(localCameraPerception.status.value.state)"
+      :status="localCameraPerception.status.value"
+      @pause="localCameraPerception.pause"
+      @stop="localCameraPerception.stop"
+    />
+    <MinecraftPerceptionIndicator
+      v-if="minecraftPerception && minecraftPerception.store.perceptionEnabled"
+      :state="minecraftPerception.state.value"
+      :service-connected="minecraftPerception.store.serviceConnected"
+      :accepted-fact-count="minecraftPerception.store.acceptedFactCount"
+      @pause="minecraftPerception.pause"
+      @resume="minecraftPerception.resume"
+      @stop="minecraftPerception.stop"
+    />
+  </div>
   <RouterView />
 </template>
 

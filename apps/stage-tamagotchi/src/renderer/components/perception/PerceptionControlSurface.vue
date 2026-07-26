@@ -1,0 +1,225 @@
+<script setup lang="ts">
+import { computed, onMounted, shallowRef, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import CloudPerceptionPolicyPanel from './CloudPerceptionPolicyPanel.vue'
+import LocalCameraPerceptionPanel from './LocalCameraPerceptionPanel.vue'
+import LocalScreenPerceptionPanel from './LocalScreenPerceptionPanel.vue'
+import MinecraftPerceptionPanel from './MinecraftPerceptionPanel.vue'
+
+import { useLocalCameraPerception } from '../../composables/perception/use-local-camera-perception'
+import { useLocalScreenPerception } from '../../composables/perception/use-local-screen-perception'
+import { useMinecraftPerception } from '../../composables/perception/use-minecraft-perception'
+import { useQwenCloudControl } from '../../composables/perception/use-qwen-cloud-control'
+import { useQwenCloudPerception } from '../../composables/perception/use-qwen-cloud-perception'
+
+const emit = defineEmits<{ started: [] }>()
+const perception = useLocalScreenPerception()
+const cameraPerception = useLocalCameraPerception()
+const minecraftPerception = useMinecraftPerception()
+const qwenCloudControl = useQwenCloudControl()
+const qwenCloudPerception = useQwenCloudPerception()
+const minecraftStore = minecraftPerception.store
+const { t } = useI18n()
+const selectedSourceId = shallowRef('')
+const consentConfirmed = shallowRef(false)
+const cameraConsentConfirmed = shallowRef(false)
+const activeSourceKind = shallowRef<'screen' | 'camera' | 'minecraft' | 'cloud'>('screen')
+const isPausingAll = shallowRef(false)
+const cloudValidationCompleted = shallowRef(false)
+const cloudScreenSourceId = shallowRef('')
+const cloudScreenConsentConfirmed = shallowRef(false)
+const cloudCameraConsentConfirmed = shallowRef(false)
+const hasActiveSources = computed(() => perception.status.value.state === 'running'
+  || cameraPerception.status.value.state === 'running'
+  || qwenCloudPerception.screenStatus.value.captureState === 'running'
+  || qwenCloudPerception.cameraStatus.value.captureState === 'running'
+  || (minecraftStore.perceptionEnabled && !minecraftStore.perceptionPaused))
+
+onMounted(() => {
+  void perception.refreshSources()
+})
+
+watch(() => perception.status.value.state, (state) => {
+  if (state === 'idle' || state === 'failed')
+    consentConfirmed.value = false
+})
+
+watch(() => cameraPerception.status.value.state, (state) => {
+  if (state === 'idle' || state === 'failed')
+    cameraConsentConfirmed.value = false
+})
+
+watch(() => qwenCloudPerception.screenStatus.value.captureState, (state) => {
+  if (state === 'idle' || state === 'failed')
+    cloudScreenConsentConfirmed.value = false
+})
+
+watch(() => qwenCloudPerception.cameraStatus.value.captureState, (state) => {
+  if (state === 'idle' || state === 'failed')
+    cloudCameraConsentConfirmed.value = false
+})
+
+async function startScreen(sourceId: string, confirmed: boolean): Promise<void> {
+  await perception.start(sourceId, confirmed)
+  if (perception.status.value.state === 'running')
+    emit('started')
+}
+
+async function startCamera(confirmed: boolean): Promise<void> {
+  await cameraPerception.start(confirmed)
+  if (cameraPerception.status.value.state === 'running')
+    emit('started')
+}
+
+async function stopScreen(): Promise<void> {
+  await perception.stop()
+  consentConfirmed.value = false
+}
+
+async function stopCamera(): Promise<void> {
+  await cameraPerception.stop()
+  cameraConsentConfirmed.value = false
+}
+
+function selectSourceKind(kind: 'screen' | 'camera' | 'minecraft' | 'cloud'): void {
+  activeSourceKind.value = kind
+  if (kind === 'screen' && perception.sources.value.length === 0)
+    void perception.refreshSources()
+  if (kind === 'cloud' && qwenCloudPerception.screenSources.value.length === 0)
+    void qwenCloudPerception.refreshScreenSources()
+}
+
+async function pauseAll(): Promise<void> {
+  if (isPausingAll.value)
+    return
+
+  isPausingAll.value = true
+  try {
+    const pending: Promise<void>[] = []
+    if (perception.status.value.state === 'running')
+      pending.push(perception.pause())
+    if (cameraPerception.status.value.state === 'running')
+      pending.push(cameraPerception.pause())
+    if (qwenCloudPerception.screenStatus.value.captureState === 'running')
+      pending.push(qwenCloudPerception.pauseScreen())
+    if (qwenCloudPerception.cameraStatus.value.captureState === 'running')
+      pending.push(qwenCloudPerception.pauseCamera())
+    if (minecraftStore.perceptionEnabled && !minecraftStore.perceptionPaused)
+      pending.push(minecraftPerception.pause())
+    await Promise.all(pending)
+  }
+  finally {
+    isPausingAll.value = false
+  }
+}
+
+async function refreshCloud(): Promise<void> {
+  cloudValidationCompleted.value = false
+  await qwenCloudControl.refresh()
+}
+
+async function validateCloud(): Promise<void> {
+  cloudValidationCompleted.value = false
+  await qwenCloudControl.validate()
+  cloudValidationCompleted.value = qwenCloudControl.lastErrorCode.value === undefined
+}
+
+async function stopCloud(): Promise<void> {
+  cloudValidationCompleted.value = false
+  await qwenCloudPerception.stopScreen()
+  await qwenCloudPerception.stopCamera()
+  cloudScreenConsentConfirmed.value = false
+  cloudCameraConsentConfirmed.value = false
+  await qwenCloudControl.stop()
+}
+</script>
+
+<template>
+  <div>
+    <div v-if="hasActiveSources" class="mb-2 flex justify-end">
+      <button
+        type="button"
+        class="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-xs text-white shadow-lg disabled:cursor-wait disabled:opacity-60"
+        :disabled="isPausingAll"
+        @click="pauseAll"
+      >
+        <span i-solar:pause-circle-outline size-4 />
+        {{ t('tamagotchi.stage.perception-control.pause-all') }}
+      </button>
+    </div>
+    <nav class="grid grid-cols-4 mb-2 rounded-lg bg-white/95 p-1 text-xs shadow-lg backdrop-blur-xl dark:bg-neutral-900/95">
+      <button type="button" class="flex-1 rounded-lg px-3 py-2" :class="activeSourceKind === 'screen' ? 'bg-cyan-500 text-white' : 'text-neutral-600 dark:text-neutral-300'" @click="selectSourceKind('screen')">
+        {{ t('tamagotchi.stage.perception-screen.tab') }}
+      </button>
+      <button type="button" class="flex-1 rounded-lg px-3 py-2" :class="activeSourceKind === 'camera' ? 'bg-emerald-500 text-white' : 'text-neutral-600 dark:text-neutral-300'" @click="selectSourceKind('camera')">
+        {{ t('tamagotchi.stage.perception-camera.tab') }}
+      </button>
+      <button type="button" class="flex-1 rounded-lg px-3 py-2" :class="activeSourceKind === 'minecraft' ? 'bg-lime-600 text-white' : 'text-neutral-600 dark:text-neutral-300'" @click="selectSourceKind('minecraft')">
+        {{ t('tamagotchi.stage.perception-minecraft.tab') }}
+      </button>
+      <button type="button" class="flex-1 rounded-lg px-3 py-2" :class="activeSourceKind === 'cloud' ? 'bg-blue-600 text-white' : 'text-neutral-600 dark:text-neutral-300'" @click="selectSourceKind('cloud')">
+        {{ t('tamagotchi.stage.perception-cloud.tab') }}
+      </button>
+    </nav>
+
+    <LocalScreenPerceptionPanel
+      v-if="activeSourceKind === 'screen'"
+      v-model:selected-source-id="selectedSourceId"
+      v-model:consent-confirmed="consentConfirmed"
+      :sources="perception.sources.value"
+      :status="perception.status.value"
+      :refreshing="perception.isRefreshingSources.value"
+      :error-code="perception.uiErrorCode.value"
+      :remote-statuses="perception.remoteStatuses.value"
+      :observability="perception.observability.value"
+      @refresh="perception.refreshSources"
+      @start="startScreen"
+      @pause="perception.pause"
+      @stop="stopScreen"
+      @toggle-sensitive-pause="perception.setSensitiveSurfacePaused"
+      @confirm-fact="perception.confirmFact"
+      @retract-fact="perception.retractFact"
+      @clear-facts="perception.clearFacts"
+    />
+    <LocalCameraPerceptionPanel
+      v-else-if="activeSourceKind === 'camera'"
+      v-model:consent-confirmed="cameraConsentConfirmed"
+      :status="cameraPerception.status.value"
+      :remote-statuses="cameraPerception.remoteStatuses.value"
+      :observability="cameraPerception.observability.value"
+      @start="startCamera"
+      @pause="cameraPerception.pause"
+      @stop="stopCamera"
+      @confirm-fact="cameraPerception.confirmFact"
+      @retract-fact="cameraPerception.retractFact"
+      @clear-facts="cameraPerception.clearFacts"
+    />
+    <MinecraftPerceptionPanel v-else-if="activeSourceKind === 'minecraft'" />
+    <CloudPerceptionPolicyPanel
+      v-else
+      v-model:selected-screen-source-id="cloudScreenSourceId"
+      v-model:screen-consent-confirmed="cloudScreenConsentConfirmed"
+      v-model:camera-consent-confirmed="cloudCameraConsentConfirmed"
+      :status="qwenCloudControl.status.value"
+      :loading="qwenCloudControl.isLoading.value"
+      :error-code="qwenCloudControl.lastErrorCode.value"
+      :validation-completed="cloudValidationCompleted"
+      :screen-status="qwenCloudPerception.screenStatus.value"
+      :screen-sources="qwenCloudPerception.screenSources.value"
+      :refreshing-screen-sources="qwenCloudPerception.isRefreshingSources.value"
+      :camera-status="qwenCloudPerception.cameraStatus.value"
+      @refresh="refreshCloud"
+      @validate="validateCloud"
+      @stop="stopCloud"
+      @refresh-screen-sources="qwenCloudPerception.refreshScreenSources"
+      @start-screen="qwenCloudPerception.startScreen"
+      @pause-screen="qwenCloudPerception.pauseScreen"
+      @stop-screen="qwenCloudPerception.stopScreen"
+      @start-camera="qwenCloudPerception.startCamera"
+      @pause-camera="qwenCloudPerception.pauseCamera"
+      @stop-camera="qwenCloudPerception.stopCamera"
+      @camera-privacy-mode="qwenCloudPerception.setCameraPrivacyMode"
+    />
+  </div>
+</template>

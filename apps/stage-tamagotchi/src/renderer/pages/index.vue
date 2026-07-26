@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import type { ModelSettingsRuntimeSnapshot } from '@proj-airi/stage-ui/components/scenarios/settings/model-settings/runtime'
+import type { AsrTranscriptAccumulator, VoiceConversationCancelReason, VoiceConversationErrorCode } from '@proj-airi/stage-ui/domains/voiceConversation'
 
 import type { ModelSettingsRuntimeChannelEvent } from '../../shared/model-settings-runtime'
 
 import workletUrl from '@proj-airi/stage-ui/workers/vad/process.worklet?worker&url'
 
 import { tryCatch } from '@moeru/std'
+import { toWav } from '@proj-airi/audio'
 import { electron } from '@proj-airi/electron-eventa'
 import {
   useElectronEventaInvoke,
@@ -22,21 +24,57 @@ import {
   resolveComponentStateToRuntimePhase,
 } from '@proj-airi/stage-ui/components/scenarios/settings/model-settings/runtime'
 import { WidgetStage } from '@proj-airi/stage-ui/components/scenes'
-import { useAudioRecorder } from '@proj-airi/stage-ui/composables/audio/audio-recorder'
 import { useCanvasPixelIsTransparentAtPoint } from '@proj-airi/stage-ui/composables/canvas-alpha'
+import { recoverSpeechOutputProfile } from '@proj-airi/stage-ui/domains/speechRouting'
+import {
+  createAsrTranscriptAccumulator,
+  createVoicePlaybackEchoGateState,
+  isVoicePlaybackEchoBlocked,
+  normalizeAsrTranscript,
+  reduceAsrTranscriptSegment,
+  releaseVoicePlaybackEchoGateForUserInterrupt,
+  resolveVoiceConversationSetupIssue,
+  updateVoicePlaybackEchoGate,
+  voicePlaybackEchoBlockRemainingMs,
+} from '@proj-airi/stage-ui/domains/voiceConversation'
+import { extractMessageText } from '@proj-airi/stage-ui/libs/chat-sync/wire-message'
+import {
+  onVoiceRuntimeDiagnosticsRequested,
+  publishVoiceRuntimeDiagnostics,
+} from '@proj-airi/stage-ui/services/voice-runtime-diagnostics'
+import { onVoiceSettingsChanged } from '@proj-airi/stage-ui/services/voice-settings-sync'
 import { useVAD } from '@proj-airi/stage-ui/stores/ai/models/vad'
-import { useHearingSpeechInputPipeline } from '@proj-airi/stage-ui/stores/modules/hearing'
+import { useSpeakingStore } from '@proj-airi/stage-ui/stores/audio'
+import { useChatSessionStore } from '@proj-airi/stage-ui/stores/chat/session-store'
+import { useConsciousnessStore } from '@proj-airi/stage-ui/stores/modules/consciousness'
+import { useHearingSpeechInputPipeline, useHearingStore } from '@proj-airi/stage-ui/stores/modules/hearing'
+import { useSpeechStore } from '@proj-airi/stage-ui/stores/modules/speech'
 import { useOnboardingStore } from '@proj-airi/stage-ui/stores/onboarding'
+import {
+  GPT_SOVITS_LOCAL_PROVIDER_ID,
+  QWEN3_ASR_LOCAL_PROVIDER_ID,
+  SENSEVOICE_LOCAL_DEFAULT_MODEL,
+  SENSEVOICE_LOCAL_PROVIDER_ID,
+  useProvidersStore,
+} from '@proj-airi/stage-ui/stores/providers'
 import { useSettings, useSettingsAudioDevice } from '@proj-airi/stage-ui/stores/settings'
+import { useSpeechOutputControlStore } from '@proj-airi/stage-ui/stores/speech-output-control'
+import { useSpeechOutputRoutingStore } from '@proj-airi/stage-ui/stores/speech-output-routing'
+import { useVoiceConversationStore } from '@proj-airi/stage-ui/stores/voiceConversation'
+import { useVoiceConversationPreferencesStore } from '@proj-airi/stage-ui/stores/voiceConversationPreferences'
+import { useVoiceConversationRecoveryDraftStore } from '@proj-airi/stage-ui/stores/voiceConversationRecoveryDraft'
+import { useVoiceStyleRuntimeStore } from '@proj-airi/stage-ui/stores/voiceStyleRuntime'
 import { refDebounced, useBroadcastChannel } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, onUnmounted, ref, shallowRef, toRef, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import ControlsIsland from '../components/stage-islands/controls-island/index.vue'
 import ResourceStatusIsland from '../components/stage-islands/resource-status-island/index.vue'
 import StatusIsland from '../components/stage-islands/status-island/index.vue'
+import VoiceRecoveryDraftPanel from '../components/voice/VoiceRecoveryDraftPanel.vue'
 
-import { electronOpenOnboarding } from '../../shared/eventa'
+import { electronOpenOnboarding, electronOpenSettings } from '../../shared/eventa'
 import { modelSettingsRuntimeSnapshotChannelName } from '../../shared/model-settings-runtime'
 import { useChatSyncStore } from '../stores/chat-sync'
 import { useControlsIslandStore } from '../stores/controls-island'
@@ -45,6 +83,7 @@ import { shouldSampleStageTransparency } from '../utils/stage-three-transparency
 
 const controlsIslandRef = ref<InstanceType<typeof ControlsIsland>>()
 const statusIslandRef = ref<InstanceType<typeof StatusIsland>>()
+const voiceStatusRef = ref<HTMLElement>()
 const widgetStageRef = ref<InstanceType<typeof WidgetStage>>()
 const stageCanvas = toRef(() => widgetStageRef.value?.canvasElement())
 const componentStateStage = ref<'pending' | 'loading' | 'mounted'>('pending')
@@ -53,15 +92,24 @@ const isLoading = computed(() => !stageMounted.value)
 
 const isIgnoringMouseEvents = ref(false)
 const shouldFadeOnCursorWithin = ref(false)
+const { t } = useI18n()
 
 const onboardingStore = useOnboardingStore()
 const openOnboarding = useElectronEventaInvoke(electronOpenOnboarding)
+const openSettings = useElectronEventaInvoke(electronOpenSettings)
 
 const { isOutside: isOutsideWindow } = useElectronMouseInWindow()
 const { isOutside } = useElectronMouseInElement(controlsIslandRef)
 const { isOutside: isOutsideStatusIsland } = useElectronMouseInElement(statusIslandRef)
+const { isOutside: isOutsideVoiceStatus } = useElectronMouseInElement(voiceStatusRef)
 const isOutsideFor250Ms = refDebounced(isOutside, 250)
 const isOutsideStatusIslandFor250Ms = refDebounced(isOutsideStatusIsland, 250)
+
+function safeRuntimeErrorName(error: unknown) {
+  if (error instanceof Error)
+    return error.name || 'Error'
+  return typeof error === 'string' ? 'StringError' : 'UnknownError'
+}
 const { x: relativeMouseX, y: relativeMouseY } = useElectronRelativeMouse()
 // NOTICE: In real-world use cases of Fade on Hover feature, the cursor may move around the edge of the
 // model rapidly, causing flickering effects when checking pixel transparency strictly.
@@ -180,7 +228,7 @@ const modelSettingsRuntimeSnapshot = computed<ModelSettingsRuntimeSnapshot>(() =
   })
 })
 
-watch([isOutsideFor250Ms, isOutsideStatusIslandFor250Ms, isAroundWindowBorderFor250Ms, isOutsideWindow, isTransparent, hearingDialogOpen, fadeOnHoverEnabled, stagePaused], () => {
+watch([isOutsideFor250Ms, isOutsideStatusIslandFor250Ms, isOutsideVoiceStatus, isAroundWindowBorderFor250Ms, isOutsideWindow, isTransparent, hearingDialogOpen, fadeOnHoverEnabled, stagePaused], () => {
   if (stagePaused.value) {
     isIgnoringMouseEvents.value = false
     shouldFadeOnCursorWithin.value = false
@@ -198,7 +246,10 @@ watch([isOutsideFor250Ms, isOutsideStatusIslandFor250Ms, isAroundWindowBorderFor
     return
   }
 
-  const insideControls = !isOutsideFor250Ms.value || !isOutsideStatusIslandFor250Ms.value
+  // The voice interruption control is time-sensitive. Electron forwards the
+  // first pointer move while click-through is enabled; react to that move
+  // immediately so a normal move-and-click cannot pass through the window.
+  const insideControls = !isOutsideFor250Ms.value || !isOutsideStatusIslandFor250Ms.value || !isOutsideVoiceStatus.value
   const nearBorder = isAroundWindowBorderFor250Ms.value
 
   if (insideControls || nearBorder) {
@@ -234,27 +285,348 @@ watch(modelSettingsRuntimeChannelEvent, (event) => {
 })
 
 const settingsAudioDeviceStore = useSettingsAudioDevice()
-const { stream, enabled } = storeToRefs(settingsAudioDeviceStore)
+const { stream, enabled, microphonePermission } = storeToRefs(settingsAudioDeviceStore)
 const { askPermission } = settingsAudioDeviceStore
-const { startRecord, stopRecord, onStopRecord } = useAudioRecorder(stream)
+const hearingStore = useHearingStore()
+const {
+  activeTranscriptionModel,
+  activeTranscriptionProvider,
+  configured: hearingConfigured,
+} = storeToRefs(hearingStore)
+
+// Qwen3-ASR and GPT-SoVITS are deliberately session-activated. A marker in
+// sessionStorage prevents renderer reloads from undoing a choice made during
+// the current desktop session while still restoring cold-start defaults after
+// the Electron window is recreated.
+const localVoiceStartupDefaultsMarker = 'airi/local-voice-startup-defaults-applied'
+const shouldApplyLocalVoiceStartupDefaults = sessionStorage.getItem(localVoiceStartupDefaultsMarker) !== 'true'
+if (shouldApplyLocalVoiceStartupDefaults && activeTranscriptionProvider.value === QWEN3_ASR_LOCAL_PROVIDER_ID) {
+  activeTranscriptionProvider.value = SENSEVOICE_LOCAL_PROVIDER_ID
+  activeTranscriptionModel.value = SENSEVOICE_LOCAL_DEFAULT_MODEL
+  hearingStore.activeCustomModelName = SENSEVOICE_LOCAL_DEFAULT_MODEL
+}
 const hearingPipeline = useHearingSpeechInputPipeline()
 const { transcribeForRecording, transcribeForMediaStream, stopStreamingTranscription } = hearingPipeline
-const { supportsStreamInput } = storeToRefs(hearingPipeline)
-const chatSyncStore = useChatSyncStore()
-const shouldUseStreamInput = computed(() => supportsStreamInput.value && !!stream.value)
+const { error: hearingError, finalizesOnVadEnd, supportsStreamInput } = storeToRefs(hearingPipeline)
+const consciousnessStore = useConsciousnessStore()
+const {
+  configured: chatConfigured,
+} = storeToRefs(consciousnessStore)
+const speechStore = useSpeechStore()
+const {
+  activeSpeechModel,
+  activeSpeechProvider,
+  activeSpeechVoiceId,
+  configured: speechConfigured,
+} = storeToRefs(speechStore)
+const speechOutputRoutingStore = useSpeechOutputRoutingStore()
+const providersStore = useProvidersStore()
+const activeSpeechProviderConfig = providersStore.getProviderConfig(activeSpeechProvider.value)
+const recoveredVoiceOutputProfile = recoverSpeechOutputProfile({
+  currentProfile: speechOutputRoutingStore.profileFor('voice-conversation').profile,
+  activeSelection: {
+    providerId: activeSpeechProvider.value,
+    modelId: activeSpeechModel.value,
+    voiceId: activeSpeechVoiceId.value,
+  },
+  providerDefaults: {
+    providerId: activeSpeechProvider.value,
+    modelId: typeof activeSpeechProviderConfig.model === 'string' ? activeSpeechProviderConfig.model : undefined,
+    voiceId: typeof activeSpeechProviderConfig.voice === 'string' ? activeSpeechProviderConfig.voice : undefined,
+  },
+  // This local service is intentionally session-activated and must not be
+  // resurrected from persisted defaults during a cold start.
+  blockedProviderIds: [GPT_SOVITS_LOCAL_PROVIDER_ID],
+})
+if (recoveredVoiceOutputProfile
+  && !speechOutputRoutingStore.profileFor('voice-conversation').profile) {
+  activeSpeechModel.value = recoveredVoiceOutputProfile.modelId
+  activeSpeechVoiceId.value = recoveredVoiceOutputProfile.voiceId
+  speechOutputRoutingStore.setProfile('voice-conversation', recoveredVoiceOutputProfile)
+}
+const effectiveVoiceOutputProfile = computed(() => {
+  const routedProfile = speechOutputRoutingStore.profileFor('voice-conversation').profile
+  if (routedProfile)
+    return routedProfile
 
-const { init: initVAD, dispose: disposeVAD, start: startVAD, loaded: vadLoaded } = useVAD(workletUrl, {
-  threshold: ref(0.6),
+  const configuredProfiles = speechOutputRoutingStore.profiles
+  if (configuredProfiles.textChat || configuredProfiles.voiceConversation)
+    return null
+
+  if (!speechConfigured.value)
+    return null
+
+  return {
+    providerId: activeSpeechProvider.value,
+    modelId: activeSpeechModel.value,
+    voiceId: activeSpeechVoiceId.value,
+  }
+})
+const stopVoiceSettingsSync = onVoiceSettingsChanged((keys) => {
+  for (const key of keys) {
+    window.dispatchEvent(new StorageEvent('storage', {
+      key,
+      newValue: localStorage.getItem(key),
+      storageArea: localStorage,
+    }))
+  }
+})
+if (shouldApplyLocalVoiceStartupDefaults) {
+  if (activeSpeechProvider.value === GPT_SOVITS_LOCAL_PROVIDER_ID) {
+    activeSpeechProvider.value = 'speech-noop'
+    activeSpeechModel.value = ''
+    activeSpeechVoiceId.value = ''
+    speechStore.activeSpeechVoice = undefined
+  }
+
+  if (speechOutputRoutingStore.profiles.textChat?.providerId === GPT_SOVITS_LOCAL_PROVIDER_ID)
+    speechOutputRoutingStore.clearProfile('text-chat')
+  if (speechOutputRoutingStore.profiles.voiceConversation?.providerId === GPT_SOVITS_LOCAL_PROVIDER_ID)
+    speechOutputRoutingStore.clearProfile('voice-conversation')
+
+  sessionStorage.setItem(localVoiceStartupDefaultsMarker, 'true')
+}
+const chatSyncStore = useChatSyncStore()
+const chatSessionStore = useChatSessionStore()
+const { activeSessionId: activeChatSessionId } = storeToRefs(chatSessionStore)
+const voiceConversationStore = useVoiceConversationStore()
+const voiceConversationPreferencesStore = useVoiceConversationPreferencesStore()
+const { preferences: voiceConversationPreferences } = storeToRefs(voiceConversationPreferencesStore)
+const voiceRecoveryDraftStore = useVoiceConversationRecoveryDraftStore()
+const { draft: voiceRecoveryDraft } = storeToRefs(voiceRecoveryDraftStore)
+const { latestResolution: latestVoiceStyleResolution } = storeToRefs(useVoiceStyleRuntimeStore())
+const speechOutputControlStore = useSpeechOutputControlStore()
+const { latestStopAcknowledgement } = storeToRefs(speechOutputControlStore)
+const { nowSpeaking } = storeToRefs(useSpeakingStore())
+const shouldUseStreamInput = computed(() => voiceConversationPreferences.value.mode === 'streaming-asr'
+  && supportsStreamInput.value
+  && !!stream.value)
+const currentVoiceMode = computed(() => shouldUseStreamInput.value ? 'streaming-asr' : 'vad-turn-taking')
+const voiceSetupIssue = computed(() => resolveVoiceConversationSetupIssue({
+  hearingConfigured: hearingConfigured.value,
+  chatConfigured: chatConfigured.value,
+  speechConfigured: !!effectiveVoiceOutputProfile.value,
+  requiresCloudPrivacyAcknowledgement: effectiveVoiceOutputProfile.value?.providerId === 'minimax-speech',
+  cloudPrivacyAcknowledged: voiceConversationPreferences.value.cloudPrivacyAcknowledged,
+}))
+const voiceDiagnosticsSnapshot = computed(() => {
+  const entries = voiceConversationStore.timeline
+  const speechStart = entries.findLast(entry => entry.name === 'voice.vad.speech_start')
+  const asrPartial = speechStart?.turnId
+    ? entries.find(entry => entry.turnId === speechStart.turnId && entry.name === 'voice.asr.first_partial')
+    : undefined
+  const ttsRequest = entries.findLast(entry => entry.name === 'voice.tts.first_request')
+  const ttsAudio = ttsRequest?.turnId
+    ? entries.find(entry => entry.turnId === ttsRequest.turnId && entry.name === 'voice.tts.first_audio')
+    : undefined
+
+  return {
+    inputProviderId: activeTranscriptionProvider.value || undefined,
+    inputModelId: activeTranscriptionModel.value || undefined,
+    inputSupportsStreaming: supportsStreamInput.value,
+    outputProviderId: effectiveVoiceOutputProfile.value?.providerId,
+    outputModelId: effectiveVoiceOutputProfile.value?.modelId,
+    voiceId: effectiveVoiceOutputProfile.value?.voiceId,
+    ttsCapability: effectiveVoiceOutputProfile.value?.providerId === 'minimax-speech' ? 'rest-aggregated' as const : 'not-declared' as const,
+    lastErrorCode: voiceConversationStore.session?.lastErrorCode,
+    asrFirstPartialLatencyMs: speechStart && asrPartial ? asrPartial.at - speechStart.at : undefined,
+    ttsFirstAudioLatencyMs: ttsRequest && ttsAudio ? ttsAudio.at - ttsRequest.at : undefined,
+    styleWarningCodes: latestVoiceStyleResolution.value?.warnings.map(warning => warning.code) ?? [],
+    updatedAt: Date.now(),
+  }
+})
+const stopVoiceDiagnosticsRequest = onVoiceRuntimeDiagnosticsRequested(() => {
+  publishVoiceRuntimeDiagnostics(voiceDiagnosticsSnapshot.value)
+})
+watch(voiceDiagnosticsSnapshot, snapshot => publishVoiceRuntimeDiagnostics(snapshot), { deep: true, immediate: true })
+const voiceProviderSnapshot = computed(() => ({
+  inputProviderId: activeTranscriptionProvider.value || undefined,
+  inputModelId: activeTranscriptionModel.value || undefined,
+  outputProviderId: effectiveVoiceOutputProfile.value?.providerId,
+  outputModelId: effectiveVoiceOutputProfile.value?.modelId,
+  voiceId: effectiveVoiceOutputProfile.value?.voiceId,
+}))
+
+watch(voiceProviderSnapshot, (next, previous) => {
+  if (!previous || JSON.stringify(next) === JSON.stringify(previous))
+    return
+
+  void handleVoiceProviderSwitch(next)
+}, { deep: true })
+
+watch(microphonePermission, (permission) => {
+  if (permission.state === 'requesting') {
+    voiceConversationStore.beginPermissionRequest({
+      sessionId: permission.requestId ?? createVoiceRuntimeId('voice-session'),
+      mode: currentVoiceMode.value,
+      ...voiceProviderSnapshot.value,
+      now: permission.updatedAt,
+    })
+    return
+  }
+
+  if (permission.state === 'granted') {
+    voiceConversationStore.grantPermission(permission.updatedAt)
+    return
+  }
+
+  if (permission.state === 'denied') {
+    const canApplyRevocation = !['idle', 'stopped', 'failed'].includes(voiceConversationStore.state)
+    if (voiceConversationStore.state === 'requesting-permission'
+      || (permission.failureReason === 'revoked' && canApplyRevocation)) {
+      voiceConversationStore.denyPermission({
+        at: permission.updatedAt,
+        revoked: permission.failureReason === 'revoked',
+      })
+    }
+    return
+  }
+
+  if (permission.state === 'failed' && voiceConversationStore.state === 'requesting-permission') {
+    voiceConversationStore.dispatch({
+      type: 'fail',
+      code: 'asr_error',
+      reason: 'asr-error',
+      at: permission.updatedAt,
+    })
+  }
+}, { flush: 'sync', immediate: true })
+const voiceStatusVisible = computed(() => enabled.value || voiceConversationStore.state !== 'idle')
+const canInterruptVoiceConversation = computed(() => voiceConversationStore.state === 'speaking'
+  && voiceConversationPreferences.value.interruptionPolicy === 'pushToInterrupt')
+const voicePrimaryActionLabel = computed(() => enabled.value
+  ? t('tamagotchi.stage.voice.actions.stop')
+  : t('tamagotchi.stage.voice.actions.start'))
+const voiceStatusLabel = computed(() => t(`tamagotchi.stage.voice.state.${voiceConversationStore.state}`))
+const voiceFailureDescriptionKey = computed(() => {
+  const errorCode = voiceConversationStore.session?.lastErrorCode
+  switch (errorCode) {
+    case 'hearing_not_configured':
+      return 'tamagotchi.stage.voice.description.hearing-not-configured'
+    case 'chat_not_configured':
+      return 'tamagotchi.stage.voice.description.chat-not-configured'
+    case 'speech_not_configured':
+      return 'tamagotchi.stage.voice.description.speech-not-configured'
+    case 'cloud_tts_privacy_not_acknowledged':
+      return 'tamagotchi.stage.voice.description.cloud-privacy-not-acknowledged'
+    case 'permission_denied':
+      return 'tamagotchi.stage.voice.description.permission-denied'
+    case 'asr_error':
+      return 'tamagotchi.stage.voice.description.asr-error'
+    case 'chat_error':
+      return 'tamagotchi.stage.voice.description.chat-error'
+    case 'tts_error':
+    case 'playback_error':
+      return 'tamagotchi.stage.voice.description.tts-error'
+    default:
+      return 'tamagotchi.stage.voice.description.failed'
+  }
+})
+const voiceStatusDescription = computed(() => {
+  if (voiceConversationStore.state === 'failed')
+    return t(voiceFailureDescriptionKey.value)
+  if (!enabled.value)
+    return t('tamagotchi.stage.voice.description.disabled')
+  if (voiceConversationStore.state === 'speaking')
+    return t('tamagotchi.stage.voice.description.speaking')
+  if (!supportsStreamInput.value)
+    return t('tamagotchi.stage.voice.description.recording')
+  return t('tamagotchi.stage.voice.description.streaming')
+})
+const voiceFailureSettingsAction = computed(() => {
+  if (voiceConversationStore.state !== 'failed')
+    return
+
+  const errorCode = voiceConversationStore.session?.lastErrorCode
+  switch (errorCode) {
+    case 'chat_not_configured':
+    case 'chat_error':
+      return {
+        label: t('tamagotchi.stage.voice.actions.configure-chat'),
+        route: '/settings/modules/consciousness',
+      }
+    case 'speech_not_configured':
+    case 'cloud_tts_privacy_not_acknowledged':
+    case 'tts_error':
+    case 'playback_error':
+      return {
+        label: t('tamagotchi.stage.voice.actions.configure-speech'),
+        route: '/settings/modules/speech',
+      }
+    default:
+      return {
+        label: t('tamagotchi.stage.voice.actions.configure-hearing'),
+        route: '/settings/modules/hearing',
+      }
+  }
+})
+const voiceStatusToneClass = computed(() => {
+  switch (voiceConversationStore.state) {
+    case 'failed':
+      return 'border-red-300/70 bg-red-50/85 text-red-900 dark:border-red-500/40 dark:bg-red-950/80 dark:text-red-100'
+    case 'speaking':
+      return 'border-primary-300/70 bg-primary-50/85 text-primary-900 dark:border-primary-500/40 dark:bg-primary-950/80 dark:text-primary-100'
+    case 'speech-detected':
+    case 'transcribing':
+      return 'border-amber-300/70 bg-amber-50/85 text-amber-900 dark:border-amber-500/40 dark:bg-amber-950/80 dark:text-amber-100'
+    default:
+      return 'border-neutral-200/80 bg-white/80 text-neutral-900 dark:border-neutral-800/80 dark:bg-neutral-950/80 dark:text-neutral-100'
+  }
+})
+
+const VAD_SAMPLE_RATE = 16_000
+const { init: initVAD, dispose: disposeVAD, start: startVAD, stop: stopVAD } = useVAD(workletUrl, {
+  threshold: () => voiceConversationPreferences.value.vadThreshold,
+  minSilenceDurationMs: () => voiceConversationPreferences.value.trailingSilenceMs,
+  minSpeechDurationMs: () => voiceConversationPreferences.value.minSpeechDurationMs,
   onSpeechStart: () => {
     void handleSpeechStart()
   },
   onSpeechEnd: () => {
     void handleSpeechEnd()
   },
+  onSpeechReady: ({ buffer, duration }) => {
+    void handleVadSpeechReady(buffer, duration)
+  },
 })
 
-let stopOnStopRecord: (() => void) | undefined
 const audioInteractionStarting = ref(false)
+const activeAsrTranscript = shallowRef<AsrTranscriptAccumulator | null>(null)
+const lastVoiceFinalTranscript = shallowRef<{ text: string, at: number } | null>(null)
+const voicePlaybackEchoGate = shallowRef(createVoicePlaybackEchoGateState())
+let nextVoiceTurnSequence = 0
+let streamingAsrGeneration = 0
+let streamingAsrLifecycle: Promise<void> = Promise.resolve()
+let vadLifecycle: Promise<void> = Promise.resolve()
+let echoGateResumeTimer: ReturnType<typeof setTimeout> | undefined
+let automaticVoiceInputSuspended = false
+let activeVoiceInputStream: MediaStream | undefined
+let asrFirstPartialTurnId: string | undefined
+let voiceProviderSwitchGeneration = 0
+let voiceInterruptGeneration = 0
+
+async function handleVoiceProviderSwitch(next: typeof voiceProviderSnapshot.value) {
+  const generation = ++voiceProviderSwitchGeneration
+  voiceRecoveryDraftStore.clear()
+  speechOutputControlStore.requestStopSpeaking('provider-switch')
+  streamingAsrGeneration += 1
+  activeAsrTranscript.value = null
+  asrFirstPartialTurnId = undefined
+  activeVoiceInputStream = undefined
+  voiceConversationStore.applyProviderSwitch({ ...next, now: Date.now() })
+
+  await Promise.allSettled([
+    enqueueVadLifecycle(stopVAD),
+    enqueueStreamingAsrLifecycle(async () => {
+      await stopStreamingTranscription(true)
+    }),
+  ])
+
+  if (generation !== voiceProviderSwitchGeneration || !enabled.value || !stream.value)
+    return
+
+  await startAudioInteraction()
+}
 
 // Caption overlay broadcast channel
 type CaptionChannelEvent
@@ -262,74 +634,637 @@ type CaptionChannelEvent
     | { type: 'caption-assistant', text: string }
 const { post: postCaption } = useBroadcastChannel<CaptionChannelEvent, CaptionChannelEvent>({ name: 'airi-caption-overlay' })
 
-function handleStreamingSentenceEnd(delta: string) {
-  console.info('[Main Page] Received transcription delta:', delta)
-  const finalText = delta
-  if (!finalText || !finalText.trim()) {
+function postCaptionSafely(event: CaptionChannelEvent) {
+  try {
+    postCaption(event)
+  }
+  catch (error) {
+    console.warn('[Main Page] Caption channel is unavailable; continuing the voice turn without overlay updates.', {
+      errorName: safeRuntimeErrorName(error),
+    })
+  }
+}
+
+function createVoiceRuntimeId(prefix: string) {
+  nextVoiceTurnSequence += 1
+  return `${prefix}-${Date.now().toString(36)}-${nextVoiceTurnSequence.toString(36)}`
+}
+
+function findVoiceUserMessage(
+  sessionId: string,
+  candidateTexts: readonly string[],
+  fromIndex = 0,
+) {
+  const normalizedCandidates = new Set(candidateTexts.map(text => text.trim()).filter(Boolean))
+  const messages = chatSessionStore.getSessionMessages(sessionId)
+  for (let index = messages.length - 1; index >= fromIndex; index -= 1) {
+    const message = messages[index]
+    if (message?.role !== 'user' || !normalizedCandidates.has(extractMessageText(message).trim()))
+      continue
+
+    return { id: message.id, index }
+  }
+}
+
+function replaceVoiceConversationSession(mode: 'streaming-asr' | 'vad-turn-taking', listeningImmediately: boolean) {
+  voiceConversationStore.start({
+    sessionId: createVoiceRuntimeId('voice-session'),
+    mode,
+    ...voiceProviderSnapshot.value,
+    listeningImmediately,
+  })
+}
+
+function startVoiceListeningSession(mode: 'streaming-asr' | 'vad-turn-taking') {
+  if (voiceConversationStore.state === 'listening')
+    return
+
+  if (voiceConversationStore.state === 'interrupted') {
+    voiceConversationStore.dispatch({ type: 'interruption-ready' })
     return
   }
 
-  postCaption({ type: 'caption-speaker', text: finalText })
+  if (['speech-detected', 'transcribing', 'user-turn-ready', 'thinking', 'speaking'].includes(voiceConversationStore.state))
+    return
 
-  void (async () => {
-    try {
-      console.info('[Main Page] Sending transcription to chat:', finalText)
-      await chatSyncStore.requestIngest({ text: finalText })
+  replaceVoiceConversationSession(mode, true)
+}
+
+async function failVoiceConversationStart(
+  errorCode: VoiceConversationErrorCode,
+  cancelReason: VoiceConversationCancelReason,
+) {
+  if (voiceConversationStore.state !== 'failed') {
+    if (!voiceConversationStore.session || voiceConversationStore.state === 'stopped')
+      replaceVoiceConversationSession(currentVoiceMode.value, false)
+
+    voiceConversationStore.dispatch({ type: 'fail', code: errorCode, reason: cancelReason })
+  }
+
+  enabled.value = false
+}
+
+watch(voiceSetupIssue, (issue) => {
+  if (!enabled.value || issue?.code !== 'cloud_tts_privacy_not_acknowledged')
+    return
+
+  speechOutputControlStore.requestStopSpeaking('voice-stop')
+  void failVoiceConversationStart(issue.errorCode, issue.cancelReason)
+})
+
+function openVoiceFailureSettings() {
+  const action = voiceFailureSettingsAction.value
+  if (action)
+    openSettings({ route: action.route })
+}
+
+function beginVoiceTurn(mode: 'streaming-asr' | 'vad-turn-taking') {
+  startVoiceListeningSession(mode)
+  const turnId = createVoiceRuntimeId('voice-turn')
+  asrFirstPartialTurnId = undefined
+  activeAsrTranscript.value = createAsrTranscriptAccumulator(turnId)
+  voiceConversationStore.dispatch({ type: 'speech-start', turnId })
+  return turnId
+}
+
+function ensureVoiceTurn(mode: 'streaming-asr' | 'vad-turn-taking') {
+  const current = activeAsrTranscript.value
+  if (current && voiceConversationStore.isCurrentTurn(current.turnId))
+    return current.turnId
+
+  return beginVoiceTurn(mode)
+}
+
+function markVoiceTurnTranscribing(turnId: string) {
+  if (voiceConversationStore.state === 'speech-detected')
+    voiceConversationStore.dispatch({ type: 'asr-start', turnId })
+}
+
+async function dropActiveVoiceTurnAndResumeListening(mode: 'streaming-asr' | 'vad-turn-taking') {
+  activeAsrTranscript.value = null
+  voiceConversationStore.stop('unknown')
+  startVoiceListeningSession(mode)
+
+  if (mode === 'streaming-asr'
+    && finalizesOnVadEnd.value
+    && enabled.value
+    && stream.value
+    && !shouldIgnoreAutomaticVoiceInput()) {
+    await startStreamingAsr(stream.value)
+  }
+}
+
+function shouldIgnoreAutomaticVoiceInput() {
+  return automaticVoiceInputSuspended
+    || !!voiceRecoveryDraft.value
+    || isVoicePlaybackEchoBlocked(voicePlaybackEchoGate.value)
+}
+
+function canStartAutomaticVoiceTurn() {
+  return !['speech-detected', 'transcribing', 'user-turn-ready', 'thinking', 'speaking'].includes(voiceConversationStore.state)
+}
+
+function isRecentDuplicateVoiceFinal(text: string) {
+  const previous = lastVoiceFinalTranscript.value
+  if (!previous)
+    return false
+
+  return previous.text === text && Date.now() - previous.at < 2_000
+}
+
+async function sendFinalVoiceTranscript(turnId: string, text: string) {
+  if (isRecentDuplicateVoiceFinal(text)) {
+    console.info('[Main Page] Dropping duplicate final voice transcript.', { textLength: text.length })
+    return
+  }
+
+  lastVoiceFinalTranscript.value = { text, at: Date.now() }
+  postCaptionSafely({ type: 'caption-speaker', text })
+  voiceConversationStore.dispatch({ type: 'chat-ingested', turnId })
+  const sessionIdBeforeIngest = activeChatSessionId.value
+  const messageCountBeforeIngest = sessionIdBeforeIngest
+    ? chatSessionStore.getSessionMessages(sessionIdBeforeIngest).length
+    : 0
+
+  try {
+    console.info('[Main Page] Sending final voice transcript to chat.', { textLength: text.length })
+    await chatSyncStore.requestIngest({ text })
+    voiceRecoveryDraftStore.clear()
+  }
+  catch (err) {
+    const sessionId = sessionIdBeforeIngest || activeChatSessionId.value
+    const failedMessage = sessionId
+      ? findVoiceUserMessage(sessionId, [text], messageCountBeforeIngest)
+      : undefined
+    if (sessionId) {
+      voiceRecoveryDraftStore.retain({
+        draftId: createVoiceRuntimeId('voice-recovery'),
+        sessionId,
+        turnId,
+        failedMessageId: failedMessage?.id,
+        text,
+      })
     }
-    catch (err) {
-      console.error('[Main Page] Failed to send chat from voice:', err)
+    voiceConversationStore.dispatch({ type: 'fail', code: 'chat_error', reason: 'chat-error' })
+    await suspendAutomaticVoiceInputForPlayback()
+    console.error('[Main Page] Failed to send chat from voice.', { errorName: safeRuntimeErrorName(err) })
+  }
+}
+
+async function retryVoiceRecoveryDraft() {
+  const draft = voiceRecoveryDraft.value
+  if (!draft || !voiceRecoveryDraftStore.beginRetry())
+    return
+
+  voiceConversationStore.dispatch({ type: 'chat-retry', turnId: draft.turnId })
+  const currentMessages = chatSessionStore.getSessionMessages(draft.sessionId)
+  const messageIndexById = draft.failedMessageId
+    ? currentMessages.findIndex(message => message.id === draft.failedMessageId)
+    : -1
+  const fallbackMessage = findVoiceUserMessage(
+    draft.sessionId,
+    [draft.originalText, draft.text],
+  )
+  const sourceIndex = messageIndexById >= 0 ? messageIndexById : fallbackMessage?.index
+
+  try {
+    if (sourceIndex === undefined) {
+      await chatSyncStore.requestIngest({
+        text: draft.text,
+        sessionId: draft.sessionId,
+      })
     }
-  })()
+    else {
+      await chatSyncStore.requestRetry({
+        sessionId: draft.sessionId,
+        index: sourceIndex,
+        sourceMessageId: draft.failedMessageId,
+        replacementText: draft.text,
+      })
+    }
+
+    voiceRecoveryDraftStore.clear()
+  }
+  catch (error) {
+    const failedMessage = findVoiceUserMessage(
+      draft.sessionId,
+      [draft.text],
+      sourceIndex ?? 0,
+    )
+    voiceRecoveryDraftStore.failRetry(failedMessage?.id)
+    voiceConversationStore.dispatch({ type: 'fail', code: 'chat_error', reason: 'chat-error' })
+    console.error('[Main Page] Failed to retry recovered voice chat.', { errorName: safeRuntimeErrorName(error) })
+  }
+}
+
+function discardVoiceRecoveryDraft() {
+  voiceRecoveryDraftStore.clear()
+  if (!enabled.value)
+    return
+
+  voiceConversationStore.stop('chat-error')
+  startVoiceListeningSession(currentVoiceMode.value)
+  void resumeAutomaticVoiceInputAfterPlayback()
+}
+
+async function consumeFinalAsrTranscript(
+  mode: 'streaming-asr' | 'vad-turn-taking',
+  text: string,
+  source: 'stream' | 'recording',
+  expectedTurnId?: string,
+) {
+  if (expectedTurnId
+    && (activeAsrTranscript.value?.turnId !== expectedTurnId || !voiceConversationStore.isCurrentTurn(expectedTurnId))) {
+    console.info('[Main Page] Dropping stale ASR result after the voice turn changed:', { source })
+    return
+  }
+
+  if (shouldIgnoreAutomaticVoiceInput()) {
+    console.info('[Main Page] Dropping ASR transcript while assistant playback is active:', { source })
+    return
+  }
+
+  if (!activeAsrTranscript.value && !canStartAutomaticVoiceTurn()) {
+    console.info('[Main Page] Dropping ASR transcript while voice session is busy:', { source, state: voiceConversationStore.state })
+    return
+  }
+
+  const normalizedText = normalizeAsrTranscript(text)
+  if (!normalizedText) {
+    const turnId = activeAsrTranscript.value?.turnId
+    activeAsrTranscript.value = null
+
+    if (turnId && voiceConversationStore.isCurrentTurn(turnId)) {
+      if (hearingError.value) {
+        voiceConversationStore.dispatch({ type: 'fail', code: 'asr_error', reason: 'asr-error' })
+      }
+      else {
+        voiceConversationStore.stop('unknown')
+        startVoiceListeningSession(mode)
+      }
+    }
+    return
+  }
+
+  if (isRecentDuplicateVoiceFinal(normalizedText)) {
+    console.info('[Main Page] Dropping recent duplicate ASR transcript before opening a voice turn:', { source })
+    return
+  }
+
+  const turnId = expectedTurnId ?? ensureVoiceTurn(mode)
+  const current = activeAsrTranscript.value ?? createAsrTranscriptAccumulator(turnId)
+  const result = reduceAsrTranscriptSegment(current, {
+    segmentId: createVoiceRuntimeId(`asr-${source}`),
+    turnId,
+    text: normalizedText,
+    isFinal: true,
+  })
+
+  activeAsrTranscript.value = result.accumulator
+  if (!result.ok) {
+    console.info('[Main Page] Dropping stale ASR transcript:', { source, reason: result.reason })
+    await dropActiveVoiceTurnAndResumeListening(mode)
+    return
+  }
+
+  if (!result.accepted) {
+    console.info('[Main Page] Dropping ASR transcript:', { source, reason: result.reason })
+    await dropActiveVoiceTurnAndResumeListening(mode)
+    return
+  }
+
+  if (!result.finalText) {
+    await dropActiveVoiceTurnAndResumeListening(mode)
+    return
+  }
+
+  markVoiceTurnTranscribing(turnId)
+  voiceConversationStore.dispatch({ type: 'asr-final', turnId }, { textLength: result.finalText.length })
+  activeAsrTranscript.value = null
+  await sendFinalVoiceTranscript(turnId, result.finalText)
+}
+
+function handleStreamingSentenceEnd(delta: string) {
+  if (shouldIgnoreAutomaticVoiceInput())
+    return
+
+  const text = normalizeAsrTranscript(delta)
+  if (!text)
+    return
+
+  const turnId = activeAsrTranscript.value?.turnId
+    ?? (canStartAutomaticVoiceTurn() ? beginVoiceTurn('streaming-asr') : undefined)
+  if (!turnId || !voiceConversationStore.isCurrentTurn(turnId))
+    return
+
+  const current = activeAsrTranscript.value ?? createAsrTranscriptAccumulator(turnId)
+  const result = reduceAsrTranscriptSegment(current, {
+    segmentId: createVoiceRuntimeId('asr-stream-partial'),
+    turnId,
+    text,
+    isFinal: false,
+  })
+
+  if (!result.ok || !result.accepted)
+    return
+
+  activeAsrTranscript.value = result.accumulator
+  if (asrFirstPartialTurnId !== turnId) {
+    asrFirstPartialTurnId = turnId
+    voiceConversationStore.dispatch({ type: 'asr-first-partial', turnId }, { textLength: text.length })
+  }
+  console.info('[Main Page] Received partial streaming transcription.', { textLength: text.length })
+  postCaptionSafely({ type: 'caption-speaker', text: result.partialText ?? text })
 }
 
 function handleStreamingSpeechEnd(text: string) {
-  console.info('[Main Page] Speech ended, final text:', text)
-  postCaption({ type: 'caption-speaker', text })
+  const turnId = activeAsrTranscript.value?.turnId
+  if (!turnId || shouldIgnoreAutomaticVoiceInput())
+    return
+
+  console.info('[Main Page] Streaming speech ended with one final transcript.', { textLength: text.length })
+  void consumeFinalAsrTranscript('streaming-asr', text, 'stream', turnId)
 }
 
 async function handleSpeechStart() {
-  if (shouldUseStreamInput.value) {
-    console.info('Speech detected - transcription session should already be active')
+  if (shouldIgnoreAutomaticVoiceInput()) {
+    console.info('[Main Page] Ignoring VAD speech start while assistant playback is active')
     return
   }
 
-  startRecord()
+  if (!canStartAutomaticVoiceTurn()) {
+    console.info('[Main Page] Ignoring VAD speech start while voice session is busy:', voiceConversationStore.state)
+    return
+  }
+
+  beginVoiceTurn(currentVoiceMode.value)
+
+  if (shouldUseStreamInput.value) {
+    console.info('Speech detected - transcription session should already be active')
+  }
+}
+
+function toggleVoiceConversation() {
+  if (enabled.value) {
+    speechOutputControlStore.requestStopSpeaking('voice-stop')
+    enabled.value = false
+    stopAudioInteraction('user-stop')
+    return
+  }
+
+  enabled.value = !enabled.value
+}
+
+async function waitForAssistantPlaybackToStop(requestId: number, timeoutMs = 2_500) {
+  if (latestStopAcknowledgement.value?.requestId === requestId && !nowSpeaking.value)
+    return true
+
+  return await new Promise<boolean>((resolve) => {
+    let settled = false
+    let stopWatching: (() => void) | undefined
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const finish = (stopped: boolean) => {
+      if (settled)
+        return
+      settled = true
+      if (timeout)
+        clearTimeout(timeout)
+      stopWatching?.()
+      resolve(stopped)
+    }
+    stopWatching = watch(
+      [latestStopAcknowledgement, nowSpeaking],
+      ([acknowledgement, speaking]) => acknowledgement?.requestId === requestId && !speaking && finish(true),
+      { flush: 'sync', immediate: true },
+    )
+    if (settled)
+      stopWatching()
+    else
+      timeout = setTimeout(finish, timeoutMs, false)
+  })
+}
+
+async function interruptVoiceConversation() {
+  const generation = ++voiceInterruptGeneration
+  const stopRequestId = speechOutputControlStore.requestStopSpeaking('voice-interrupt')
+  activeAsrTranscript.value = null
+
+  if (voiceConversationStore.activeTurnId && (voiceConversationStore.state === 'thinking' || voiceConversationStore.state === 'speaking'))
+    voiceConversationStore.dispatch({ type: 'interrupt', reason: 'user-interrupt' })
+
+  // Stage owns the audio sink. Its stop watcher and playback manager can settle
+  // after Vue's next render tick, so wait for the authoritative speaking signal
+  // instead of reopening the microphone against still-audible output.
+  const playbackStopped = await waitForAssistantPlaybackToStop(stopRequestId)
+  if (generation !== voiceInterruptGeneration)
+    return
+  if (!playbackStopped) {
+    voiceConversationStore.dispatch({ type: 'fail', code: 'playback_error', reason: 'playback-error' })
+    console.warn('[Main Page] Push-to-interrupt could not confirm playback stopped before resuming input')
+    return
+  }
+
+  clearEchoGateResumeTimer()
+  voicePlaybackEchoGate.value = releaseVoicePlaybackEchoGateForUserInterrupt()
+  startVoiceListeningSession(currentVoiceMode.value)
+  await resumeAutomaticVoiceInputAfterPlayback()
 }
 
 async function handleSpeechEnd() {
   if (shouldUseStreamInput.value) {
-    // Keep streaming session alive; idle timer in pipeline will handle teardown.
+    const turnId = activeAsrTranscript.value?.turnId
+    if (turnId && voiceConversationStore.isCurrentTurn(turnId))
+      voiceConversationStore.dispatch({ type: 'speech-end', turnId })
+
+    if (finalizesOnVadEnd.value) {
+      await enqueueStreamingAsrLifecycle(async () => {
+        await stopStreamingTranscription(false)
+      })
+    }
     return
   }
 
-  stopRecord()
+  const turnId = activeAsrTranscript.value?.turnId
+  if (turnId && voiceConversationStore.isCurrentTurn(turnId))
+    voiceConversationStore.dispatch({ type: 'speech-end', turnId })
+}
+
+async function handleVadSpeechReady(buffer: Float32Array, duration: number) {
+  if (shouldUseStreamInput.value || shouldIgnoreAutomaticVoiceInput())
+    return
+
+  const turnId = activeAsrTranscript.value?.turnId
+  if (!turnId || !voiceConversationStore.isCurrentTurn(turnId)) {
+    console.info('[Main Page] Dropping VAD speech buffer without a current voice turn.')
+    return
+  }
+
+  const sampleBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+  const recording = new Blob([toWav(sampleBuffer, VAD_SAMPLE_RATE)], { type: 'audio/wav' })
+  console.info('[Main Page] Transcribing buffered VAD speech.', {
+    durationMs: Math.round(duration),
+    recordingSize: recording.size,
+  })
+
+  const text = await transcribeForRecording(recording)
+  await consumeFinalAsrTranscript('vad-turn-taking', text ?? '', 'recording', turnId)
+}
+
+function clearEchoGateResumeTimer() {
+  if (!echoGateResumeTimer)
+    return
+
+  clearTimeout(echoGateResumeTimer)
+  echoGateResumeTimer = undefined
+}
+
+function enqueueStreamingAsrLifecycle(operation: () => Promise<void>) {
+  const next = streamingAsrLifecycle
+    .catch(() => undefined)
+    .then(operation)
+  streamingAsrLifecycle = next
+  return next
+}
+
+function enqueueVadLifecycle(operation: () => Promise<void>) {
+  const next = vadLifecycle
+    .catch(() => undefined)
+    .then(operation)
+  vadLifecycle = next
+  return next
+}
+
+async function startStreamingAsr(currentStream: MediaStream) {
+  const generation = ++streamingAsrGeneration
+  await enqueueStreamingAsrLifecycle(async () => {
+    if (generation !== streamingAsrGeneration || isVoicePlaybackEchoBlocked(voicePlaybackEchoGate.value))
+      return
+
+    await transcribeForMediaStream(currentStream, {
+      onSentenceEnd: (delta) => {
+        if (generation === streamingAsrGeneration)
+          handleStreamingSentenceEnd(delta)
+      },
+      onSpeechEnd: (text) => {
+        if (generation === streamingAsrGeneration)
+          handleStreamingSpeechEnd(text)
+      },
+    })
+
+    if (generation !== streamingAsrGeneration || isVoicePlaybackEchoBlocked(voicePlaybackEchoGate.value))
+      await stopStreamingTranscription(true)
+  })
+}
+
+async function suspendAutomaticVoiceInputForPlayback() {
+  if (automaticVoiceInputSuspended)
+    return
+
+  automaticVoiceInputSuspended = true
+  streamingAsrGeneration += 1
+  activeAsrTranscript.value = null
+  console.info('[Main Page] Suspending automatic voice input for assistant playback echo control')
+
+  await Promise.allSettled([
+    enqueueVadLifecycle(stopVAD),
+    enqueueStreamingAsrLifecycle(async () => {
+      await stopStreamingTranscription(true)
+    }),
+  ])
+  activeVoiceInputStream = undefined
+}
+
+async function resumeAutomaticVoiceInputAfterPlayback() {
+  if (!enabled.value || !stream.value || voiceRecoveryDraft.value || isVoicePlaybackEchoBlocked(voicePlaybackEchoGate.value))
+    return
+
+  if (!automaticVoiceInputSuspended && activeVoiceInputStream === stream.value)
+    return
+
+  automaticVoiceInputSuspended = false
+  console.info('[Main Page] Resuming automatic voice input after assistant playback echo tail')
+
+  try {
+    await enqueueVadLifecycle(async () => {
+      if (!stream.value || isVoicePlaybackEchoBlocked(voicePlaybackEchoGate.value))
+        return
+      await startVAD(stream.value)
+      if (voiceConversationStore.state === 'listening')
+        voiceConversationStore.dispatch({ type: 'vad-started' })
+      activeVoiceInputStream = stream.value
+    })
+    if (shouldUseStreamInput.value)
+      await startStreamingAsr(stream.value)
+  }
+  catch (error) {
+    console.error('[Main Page] Failed to resume voice input after assistant playback.', {
+      errorName: safeRuntimeErrorName(error),
+    })
+  }
+}
+
+async function syncAutomaticVoiceInputWithPlayback() {
+  clearEchoGateResumeTimer()
+
+  voicePlaybackEchoGate.value = updateVoicePlaybackEchoGate(voicePlaybackEchoGate.value, {
+    audiblePlayback: nowSpeaking.value,
+    voiceConversationState: voiceConversationStore.state,
+  })
+
+  if (voicePlaybackEchoGate.value.audiblePlayback || voicePlaybackEchoGate.value.assistantResponseActive) {
+    await suspendAutomaticVoiceInputForPlayback()
+    return
+  }
+
+  const remainingMs = voicePlaybackEchoBlockRemainingMs(voicePlaybackEchoGate.value)
+  if (remainingMs > 0) {
+    echoGateResumeTimer = setTimeout(() => {
+      echoGateResumeTimer = undefined
+      void resumeAutomaticVoiceInputAfterPlayback()
+    }, remainingMs)
+    return
+  }
+
+  await resumeAutomaticVoiceInputAfterPlayback()
 }
 
 async function startAudioInteraction() {
   if (audioInteractionStarting.value)
     return
 
-  // NOTICE: `stopOnStopRecord` only tracks whether the non-stream recording hook was registered.
-  //
-  // It does NOT guarantee that the current realtime transcription session is still attached to the
-  // latest `MediaStream`. We previously used it as a generic "already started" guard, which broke
-  // the hearing-config retoggle path: the mic stream was recreated, VAD restarted on the new stream,
-  // but `transcribeForMediaStream()` never reattached so speech was detected without any transcript.
-  //
-  // Keep the startup guard scoped to "startup in progress" only, and let stream changes restart the
-  // transcription binding when a new stream arrives.
+  if (stream.value
+    && activeVoiceInputStream === stream.value
+    && !shouldIgnoreAutomaticVoiceInput()) {
+    console.info('[Main Page] Voice input is already attached to the current microphone stream')
+    return
+  }
+
+  // A microphone/device retoggle replaces the MediaStream. The identity guard above
+  // skips duplicate watcher starts while still allowing a genuinely new stream here.
   audioInteractionStarting.value = true
   try {
     console.info('[Main Page] Starting audio interaction...')
 
-    initVAD().then(() => {
-      if (stream.value) {
-        console.info('[Main Page] VAD initialized successfully, starting with stream input')
-        return startVAD(stream.value)
-      }
-    }).catch((err) => {
-      console.warn('[Main Page] VAD initialization failed (non-critical for Web Speech API):', err)
-    })
+    await vadLifecycle.catch(() => undefined)
+    await initVAD()
+
+    if (stream.value && !isVoicePlaybackEchoBlocked(voicePlaybackEchoGate.value)) {
+      automaticVoiceInputSuspended = false
+      console.info('[Main Page] VAD initialized successfully, starting with stream input')
+      await enqueueVadLifecycle(async () => {
+        if (stream.value && !isVoicePlaybackEchoBlocked(voicePlaybackEchoGate.value)) {
+          await startVAD(stream.value)
+          if (voiceConversationStore.state === 'listening')
+            voiceConversationStore.dispatch({ type: 'vad-started' })
+          activeVoiceInputStream = stream.value
+        }
+      })
+    }
+    else if (isVoicePlaybackEchoBlocked(voicePlaybackEchoGate.value)) {
+      automaticVoiceInputSuspended = true
+      console.info('[Main Page] Deferring microphone ingestion until assistant playback and echo tail end')
+      void syncAutomaticVoiceInputWithPlayback()
+    }
 
     if (shouldUseStreamInput.value) {
       console.info('[Main Page] Starting streaming transcription...', {
@@ -342,49 +1277,25 @@ async function startAudioInteraction() {
         return
       }
 
-      // Use sentence deltas for live captions and speech end for final text.
-      await transcribeForMediaStream(stream.value, {
-        onSentenceEnd: handleStreamingSentenceEnd,
-        onSpeechEnd: handleStreamingSpeechEnd,
-      })
+      startVoiceListeningSession('streaming-asr')
+
+      // Sentence deltas stay UI-only; the correlated speech-end callback is
+      // the only event allowed to create a chat turn.
+      if (!isVoicePlaybackEchoBlocked(voicePlaybackEchoGate.value))
+        await startStreamingAsr(stream.value)
 
       console.info('[Main Page] Streaming transcription started successfully')
     }
-    else {
+    else if (stream.value) {
+      startVoiceListeningSession('vad-turn-taking')
       console.warn('[Main Page] Not starting streaming transcription:', {
         shouldUseStreamInput: shouldUseStreamInput.value,
         hasStream: !!stream.value,
         supportsStreamInput: supportsStreamInput.value,
       })
     }
-
-    // NOTICE: This hook is only for record-then-transcribe providers.
-    //
-    // Streaming providers use the active `MediaStream` directly, so this callback must not be treated
-    // as proof that a realtime session is alive. Future refactors should keep recorder-hook bookkeeping
-    // separate from stream transcription state, otherwise mic/device re-toggles can leave VAD active
-    // but transcription detached.
-    //
-    // Hook once for non-streaming providers.
-    if (!stopOnStopRecord) {
-      stopOnStopRecord = onStopRecord(async (recording) => {
-        if (shouldUseStreamInput.value)
-          return
-
-        const text = await transcribeForRecording(recording)
-        if (!text || !text.trim())
-          return
-
-        // Update caption overlay speaker text via BroadcastChannel
-        postCaption({ type: 'caption-speaker', text })
-
-        try {
-          await chatSyncStore.requestIngest({ text })
-        }
-        catch (err) {
-          console.error('Failed to send chat from voice:', err)
-        }
-      })
+    else {
+      console.info('[Main Page] Waiting for the microphone stream before starting a voice session')
     }
   }
   catch (e) {
@@ -395,24 +1306,59 @@ async function startAudioInteraction() {
   }
 }
 
-function stopAudioInteraction() {
+function cleanupAudioInteraction() {
   tryCatch(() => {
-    stopOnStopRecord?.()
-    stopOnStopRecord = undefined
+    clearEchoGateResumeTimer()
+    streamingAsrGeneration += 1
     audioInteractionStarting.value = false
-    void stopStreamingTranscription(true)
-    disposeVAD()
+    automaticVoiceInputSuspended = false
+    activeVoiceInputStream = undefined
+    activeAsrTranscript.value = null
+    asrFirstPartialTurnId = undefined
+    void enqueueStreamingAsrLifecycle(async () => {
+      await stopStreamingTranscription(true)
+    })
+    void enqueueVadLifecycle(async () => {
+      await stopVAD()
+      disposeVAD()
+    })
   })
+}
+
+function stopAudioInteraction(reason: 'user-stop' | 'page-dispose' = 'user-stop') {
+  voiceRecoveryDraftStore.clear()
+  voiceConversationStore.stop(reason)
+  cleanupAudioInteraction()
 }
 
 watch(enabled, async (val) => {
   console.info('[Main Page] Audio enabled changed:', val, 'stream available:', !!stream.value)
   if (val) {
-    await askPermission()
-    await startAudioInteraction()
+    const setupIssue = voiceSetupIssue.value
+    if (setupIssue) {
+      await failVoiceConversationStart(setupIssue.errorCode, setupIssue.cancelReason)
+      return
+    }
+
+    try {
+      await askPermission()
+      await startAudioInteraction()
+    }
+    catch (error) {
+      const permissionDenied = error instanceof DOMException
+        && (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError')
+      await failVoiceConversationStart(
+        permissionDenied ? 'permission_denied' : 'asr_error',
+        permissionDenied ? 'permission-denied' : 'asr-error',
+      )
+      console.error('[Main Page] Unable to start microphone input.', { errorName: safeRuntimeErrorName(error) })
+    }
   }
   else {
-    stopAudioInteraction()
+    if (voiceConversationStore.state === 'failed')
+      cleanupAudioInteraction()
+    else
+      stopAudioInteraction('user-stop')
   }
 }, { immediate: true })
 
@@ -422,12 +1368,17 @@ onMounted(() => {
   }
 })
 
-onUnmounted(() => {
+onBeforeUnmount(() => {
   postModelSettingsRuntimeChannelEvent({
     type: 'owner-gone',
     ownerInstanceId: modelSettingsRuntimeOwnerInstanceId,
   })
-  stopAudioInteraction()
+})
+
+onUnmounted(() => {
+  stopVoiceSettingsSync()
+  stopVoiceDiagnosticsRequest()
+  stopAudioInteraction('page-dispose')
 })
 
 watch(stream, async (currentStream) => {
@@ -442,16 +1393,13 @@ watch(stream, async (currentStream) => {
   await startAudioInteraction()
 })
 
-watch([stream, () => vadLoaded.value], async ([s, loaded]) => {
-  if (enabled.value && loaded && s) {
-    try {
-      await startVAD(s)
-    }
-    catch (e) {
-      console.error('Failed to start VAD with stream:', e)
-    }
-  }
-})
+watch(
+  [nowSpeaking, () => voiceConversationStore.state],
+  () => {
+    void syncAutomaticVoiceInputWithPlayback()
+  },
+  { immediate: true },
+)
 
 // Assistant caption is broadcast from Stage.vue via the same channel
 
@@ -497,6 +1445,62 @@ const cursorPosition = computed(() => ({
           :paused="stagePaused"
         />
         <HoloCoupon />
+        <Teleport to="#stage-status-overlay-stack">
+          <div
+            v-if="voiceStatusVisible"
+            ref="voiceStatusRef"
+            class="pointer-events-auto relative max-w-72 w-full border rounded-lg px-3 py-2 shadow-xl backdrop-blur-md"
+            :class="voiceStatusToneClass"
+          >
+            <div class="flex items-start gap-2">
+              <div class="mt-1 size-2.5 shrink-0 rounded-full bg-current opacity-70" />
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-sm font-medium">
+                  {{ voiceStatusLabel }}
+                </div>
+                <div class="mt-0.5 text-xs opacity-75">
+                  {{ voiceStatusDescription }}
+                </div>
+              </div>
+            </div>
+            <div class="mt-2 flex gap-2">
+              <button
+                type="button"
+                class="rounded-lg bg-neutral-900 px-2.5 py-1 text-xs text-white font-medium transition-colors dark:bg-white hover:bg-neutral-700 dark:text-neutral-950 dark:hover:bg-neutral-200"
+                :aria-label="voicePrimaryActionLabel"
+                @click.stop="toggleVoiceConversation"
+              >
+                {{ voicePrimaryActionLabel }}
+              </button>
+              <button
+                v-if="voiceFailureSettingsAction"
+                type="button"
+                class="rounded-lg bg-red-700 px-2.5 py-1 text-xs text-white font-medium transition-colors dark:bg-red-300 hover:bg-red-600 dark:text-red-950 dark:hover:bg-red-200"
+                :aria-label="voiceFailureSettingsAction.label"
+                @click.stop="openVoiceFailureSettings"
+              >
+                {{ voiceFailureSettingsAction.label }}
+              </button>
+              <button
+                v-else-if="canInterruptVoiceConversation"
+                type="button"
+                class="rounded-lg bg-primary-600 px-2.5 py-1 text-xs text-white font-medium transition-colors hover:bg-primary-500"
+                :aria-label="t('tamagotchi.stage.voice.actions.interrupt')"
+                @click.stop="interruptVoiceConversation"
+              >
+                {{ t('tamagotchi.stage.voice.actions.interrupt') }}
+              </button>
+            </div>
+          </div>
+          <VoiceRecoveryDraftPanel
+            v-if="voiceRecoveryDraft"
+            class="pointer-events-auto relative max-w-80 w-full"
+            :draft="voiceRecoveryDraft"
+            @edit="voiceRecoveryDraftStore.edit"
+            @retry="retryVoiceRecoveryDraft"
+            @discard="discardVoiceRecoveryDraft"
+          />
+        </Teleport>
         <ControlsIsland
           ref="controlsIslandRef"
         />

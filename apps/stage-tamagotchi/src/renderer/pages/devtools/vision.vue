@@ -6,9 +6,9 @@ import { errorMessageFrom } from '@moeru/std'
 import { ProcessingMeter } from '@proj-airi/stage-ui/components'
 import { VISION_WORKLOADS } from '@proj-airi/stage-ui/composables'
 import { useVisionOrchestratorStore, useVisionProcessingStore, useVisionStore } from '@proj-airi/stage-ui/stores/modules/vision'
-import { Button, FieldCheckbox, FieldCombobox, FieldRange, SelectTab } from '@proj-airi/ui'
+import { Button, FieldCombobox, FieldRange, SelectTab } from '@proj-airi/ui'
 import { storeToRefs } from 'pinia'
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
 
 import WithScreenCapture from '../../components/WithScreenCapture.vue'
 
@@ -32,10 +32,10 @@ const {
   processingHistoryMs,
 } = storeToRefs(visionProcessingStore)
 const {
-  lastResultText,
   lastResultAt,
   lastError,
 } = storeToRefs(visionOrchestratorStore)
+const lastResultText = shallowRef('')
 
 const sourcesOptions = ref<SourcesOptions>({
   types: ['screen', 'window'],
@@ -45,7 +45,6 @@ const sourcesOptions = ref<SourcesOptions>({
 const sourceCategory = ref<SourceCategory>('displays')
 const errorMessage = ref('')
 const screenshotDataUrl = ref('')
-const sendContextUpdates = ref(false)
 const captureDownscalePercent = ref(100)
 const selectedWorkload = ref<VisionWorkloadId>(VISION_WORKLOADS[0]?.id || 'screen:interpret')
 
@@ -186,10 +185,8 @@ async function handleVisionTick() {
     const result = await visionOrchestratorStore.processCapture({
       imageDataUrl: dataUrl,
       workloadId: selectedWorkload.value,
-      sourceId: activeSourceId.value,
-      capturedAt,
-      publishContext: sendContextUpdates.value,
     })
+    lastResultText.value = result.text
 
     return { capturedAt, contextUpdates: result.contextUpdates }
   }
@@ -221,6 +218,8 @@ async function startCaptureLoop() {
 async function stopCaptureLoop() {
   visionProcessingStore.stopTicker()
   stopStream()
+  screenshotDataUrl.value = ''
+  lastResultText.value = ''
   if (videoRef.value) {
     videoRef.value.pause()
     videoRef.value.srcObject = null
@@ -259,6 +258,8 @@ function handlePermissionGranted() {
 onBeforeUnmount(() => {
   visionProcessingStore.stopTicker()
   stopStream()
+  screenshotDataUrl.value = ''
+  lastResultText.value = ''
   cleanup()
 })
 </script>
@@ -518,14 +519,6 @@ onBeforeUnmount(() => {
                     {{ activeSource ? `Source: ${activeSource.name}` : 'Pick a source to begin.' }}
                   </div>
                 </div>
-
-                <div :class="['grid', 'gap-4', 'md:grid-cols-2']">
-                  <FieldCheckbox
-                    v-model="sendContextUpdates"
-                    label="Publish to character"
-                    description="Send interpreted results as context updates."
-                  />
-                </div>
               </div>
             </div>
           </div>
@@ -558,24 +551,6 @@ onBeforeUnmount(() => {
                 :class="['mt-3', 'flex', 'flex-col', 'gap-3']"
               >
                 <img :src="screenshotDataUrl" alt="Captured screen" :class="['w-full', 'rounded-lg', 'object-contain']">
-                <textarea
-                  :value="screenshotDataUrl"
-                  readonly
-                  :class="[
-                    'h-32',
-                    'w-full',
-                    'rounded-lg',
-                    'border',
-                    'border-neutral-200',
-                    'bg-white',
-                    'p-2',
-                    'text-xs',
-                    'text-neutral-700',
-                    'dark:border-neutral-800',
-                    'dark:bg-neutral-900',
-                    'dark:text-neutral-200',
-                  ]"
-                />
               </div>
               <div v-else :class="['mt-4', 'text-sm', 'text-neutral-400']">
                 No frames captured yet. Start the ticker to preview snapshots.

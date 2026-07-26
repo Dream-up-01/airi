@@ -14,6 +14,7 @@ import ControlsIslandAuthButton from './controls-island-auth-button.vue'
 import ControlsIslandFadeOnHover from './controls-island-fade-on-hover.vue'
 import ControlsIslandHearingConfig from './controls-island-hearing-config.vue'
 import ControlsIslandProfilePicker from './controls-island-profile-picker.vue'
+import ControlsIslandPerception from './ControlsIslandPerception.vue'
 import IndicatorMicVolume from './indicator-mic-volume.vue'
 
 import {
@@ -188,6 +189,18 @@ function refreshWindow() {
             </ControlButtonTooltip>
 
             <ControlButtonTooltip disable-hoverable-content>
+              <ControlsIslandPerception
+                :open="blockingOverlays.has('perception')"
+                :button-style="adjustStyleClasses.button"
+                :icon-class="adjustStyleClasses.icon"
+                @update:open="setOverlay('perception', $event)"
+              />
+              <template #tooltip>
+                {{ t('tamagotchi.stage.perception-screen.title') }}
+              </template>
+            </ControlButtonTooltip>
+
+            <ControlButtonTooltip disable-hoverable-content>
               <ControlButton :button-style="adjustStyleClasses.button" @click="toggleDark()">
                 <Transition name="fade" mode="out-in">
                   <div v-if="isDark" i-solar:moon-outline :class="adjustStyleClasses.icon" text="neutral-800 dark:neutral-300" />
@@ -226,7 +239,11 @@ function refreshWindow() {
       <!-- Main Controls -->
       <div flex flex-col gap-1>
         <ControlButtonTooltip side="left">
-          <ControlButton :button-style="adjustStyleClasses.button" @click="expanded = !expanded">
+          <ControlButton
+            :aria-label="expanded ? t('tamagotchi.stage.controls-island.collapse') : t('tamagotchi.stage.controls-island.expand')"
+            :button-style="adjustStyleClasses.button"
+            @click="expanded = !expanded"
+          >
             <div
               :class="[adjustStyleClasses.icon, expanded ? 'rotate-180' : 'rotate-0']"
               i-solar:alt-arrow-up-line-duotone scale-110 transition-all duration-300

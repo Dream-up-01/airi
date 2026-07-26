@@ -10,6 +10,7 @@ packages:
   - engines/**
   - apps/**
   - '!**/dist/**'
+  - '!services/**/runtime/**'
 overrides:
   array-flatten: npm:@nolyfill/array-flatten@^1.0.44
   axios: npm:feaxios@^0.0.23
@@ -208,6 +209,7 @@ catalog:
   '@xsai-transformers/shared': ^0.1.0
   '@xsai-transformers/transcription': ^0.1.0
   '@xsai/embed': 0.5.0-beta.2
+  '@xsai/generate-object': 0.5.0-beta.2
   '@xsai/generate-speech': 0.5.0-beta.2
   '@xsai/generate-text': 0.5.0-beta.2
   '@xsai/generate-transcription': 0.5.0-beta.2
@@ -275,6 +277,7 @@ catalog:
   is-network-error: ^1.3.1
   isolated-vm: ^6.1.2
   jose: ^6.2.2
+  js-tiktoken: ^1.0.21
   jsdom: ^29.0.2
   jszip: ^3.10.1
   knip: ^6.4.1
@@ -377,7 +380,7 @@ catalog:
   uuid: ^13.0.0
   valibot: ^1.3.1
   vaul-vue: ^0.4.1
-  vec3: ^0.2.0
+  vec3: 0.1.10
   vieval: ^0.0.5
   vite: ^8.0.8
   vite-bundle-visualizer: ^1.2.1

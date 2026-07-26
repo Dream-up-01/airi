@@ -33,6 +33,10 @@ lerna-debug.log*
 *.ogg
 *.mp3
 
+# Local third-party speech model runtime
+services/stt/.venv/
+services/tts/GPT-SoVITS/
+
 # Credentials
 cert*/
 *.pem

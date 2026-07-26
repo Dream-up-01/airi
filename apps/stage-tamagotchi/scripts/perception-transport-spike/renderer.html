@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8"></head>
+  <body>
+    <script>
+      const { ipcRenderer } = require('electron')
+      const channel = 'airi-perception-transport-spike'
+      const latencies = []
+      const sentAt = new Map()
+      let outstanding = 0
+      let maxOutstanding = 0
+      let acknowledged = 0
+      let expectedAcknowledgements = 0
+      let resolveAcknowledgements
+
+      ipcRenderer.on(`${channel}:error`, (_event, error) => {
+        throw new Error(error)
+      })
+      ipcRenderer.on(`${channel}:ack`, (_event, ack) => {
+        const startedAt = sentAt.get(ack.sequence)
+        if (startedAt !== undefined) {
+          latencies.push(ack.receivedAt - startedAt)
+          sentAt.delete(ack.sequence)
+        }
+        outstanding -= 1
+        acknowledged += 1
+        if (acknowledged === expectedAcknowledgements)
+          resolveAcknowledgements?.()
+      })
+      ipcRenderer.on(`${channel}:result`, (_event, mainResult) => {
+        const sorted = [...latencies].sort((a, b) => a - b)
+        const p95Index = Math.max(0, Math.ceil(sorted.length * 0.95) - 1)
+        const durationMs = performance.now() - globalThis.spikeStartedAt
+        const result = {
+          ...mainResult,
+          sentMessages: expectedAcknowledgements,
+          durationMs: Number(durationMs.toFixed(2)),
+          throughputMiBPerSecond: Number(((mainResult.acceptedBytes / 1024 / 1024) / (durationMs / 1000)).toFixed(2)),
+          latencyP95Ms: Number((sorted[p95Index] || 0).toFixed(3)),
+          latencyMaxMs: Number((sorted.at(-1) || 0).toFixed(3)),
+          maxOutstanding,
+        }
+        console.log(`PERCEPTION_TRANSPORT_SPIKE=${JSON.stringify(result)}`)
+      })
+
+      function send(message) {
+        const timestamp = performance.timeOrigin + performance.now()
+        sentAt.set(message.sequence, timestamp)
+        outstanding += 1
+        maxOutstanding = Math.max(maxOutstanding, outstanding)
+        expectedAcknowledgements += 1
+        ipcRenderer.send(channel, message)
+      }
+
+      async function run() {
+        globalThis.spikeStartedAt = performance.now()
+        let sequence = 0
+        for (let index = 0; index < 1_000; index++)
+          send({ type: 'data', kind: 'pcm', sequence: ++sequence, bytes: new Uint8Array(3_200) })
+        for (let index = 0; index < 24; index++)
+          send({ type: 'data', kind: 'jpeg', sequence: ++sequence, bytes: new Uint8Array(190 * 1_024) })
+
+        send({ type: 'cancel', sequence: ++sequence })
+        for (let index = 0; index < 90; index++)
+          send({ type: 'data', kind: 'pcm-after-cancel', sequence: ++sequence, bytes: new Uint8Array(3_200) })
+
+        await new Promise((resolve) => {
+          resolveAcknowledgements = resolve
+          if (acknowledged === expectedAcknowledgements)
+            resolve()
+        })
+        ipcRenderer.send(channel, { type: 'finish' })
+      }
+
+      void run()
+    </script>
+  </body>
+</html>

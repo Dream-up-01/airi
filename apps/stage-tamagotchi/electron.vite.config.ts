@@ -23,6 +23,11 @@ export default defineConfig({
   main: {
     build: {
       externalizeDeps: {
+        exclude: [
+          '@proj-airi/stage-ui',
+          '@proj-airi/stage-ui/domains/perception',
+          '@proj-airi/stage-ui/services/perception',
+        ],
         include: [
           // Native modules that have `__dirname` usages. Externalize to avoid bundling
           // them into ESM and causing issues in runtime.
@@ -72,8 +77,11 @@ export default defineConfig({
     resolve: {
       alias: {
         '@proj-airi/i18n': resolve(join(import.meta.dirname, '..', '..', 'packages', 'i18n', 'src')),
+        '@proj-airi/model-driver-mediapipe': resolve(join(import.meta.dirname, '..', '..', 'packages', 'model-driver-mediapipe', 'src', 'index.ts')),
         '@proj-airi/server-runtime/server': resolve(join(import.meta.dirname, '..', '..', 'packages', 'server-runtime', 'src', 'server', 'index.ts')),
         '@proj-airi/server-runtime': resolve(join(import.meta.dirname, '..', '..', 'packages', 'server-runtime', 'src', 'index.ts')),
+        '@proj-airi/stage-ui/domains/perception': resolve(join(import.meta.dirname, '..', '..', 'packages', 'stage-ui', 'src', 'domains', 'perception', 'index.ts')),
+        '@proj-airi/stage-ui/services/perception': resolve(join(import.meta.dirname, '..', '..', 'packages', 'stage-ui', 'src', 'services', 'perception', 'index.ts')),
       },
     },
   },
@@ -138,6 +146,7 @@ export default defineConfig({
       alias: {
         '@proj-airi/server-sdk': resolve(join(import.meta.dirname, '..', '..', 'packages', 'server-sdk', 'src')),
         '@proj-airi/i18n': resolve(join(import.meta.dirname, '..', '..', 'packages', 'i18n', 'src')),
+        '@proj-airi/model-driver-mediapipe': resolve(join(import.meta.dirname, '..', '..', 'packages', 'model-driver-mediapipe', 'src', 'index.ts')),
         // NOTICE: the @proj-airi/stage-ui alias resolves to a directory; rolldown
         // concatenates sub-paths without a file extension, so bare .ts files at the
         // stores/ root (e.g. mcp-tool-bridge.ts) are not found.  Add explicit aliases

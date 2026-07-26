@@ -4,7 +4,6 @@ import type { CommonContentPart, Message } from '@xsai/shared-chat'
 import type { VisionWorkloadId } from './use-vision-workloads'
 
 import { storeToRefs } from 'pinia'
-import { ref } from 'vue'
 
 import { useLLM } from '../../stores/llm'
 import { useVisionStore } from '../../stores/modules/vision'
@@ -39,8 +38,6 @@ export function useVisionInference() {
   const providersStore = useProvidersStore()
   const visionStore = useVisionStore()
   const { activeProvider, activeModel, ollamaThinkingEnabled } = storeToRefs(visionStore)
-
-  const lastText = ref('')
 
   async function runVisionInference(input: VisionInferenceInput) {
     if (!activeProvider.value || !activeModel.value)
@@ -104,12 +101,12 @@ export function useVisionInference() {
       clearTimeout(timeoutHandle)
     }
 
-    lastText.value = buffer.trim()
-    return lastText.value
+    const text = buffer.trim()
+    buffer = ''
+    return text
   }
 
   return {
-    lastText,
     runVisionInference,
   }
 }

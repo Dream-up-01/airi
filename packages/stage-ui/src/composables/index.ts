@@ -1,5 +1,7 @@
 export * from './audio'
 export * from './canvas-alpha'
+export * from './characterSourceFileReader'
+export * from './companionPresetFileReader'
 export * from './linked-account-errors'
 export * from './llm-marker-parser'
 export * from './markdown'

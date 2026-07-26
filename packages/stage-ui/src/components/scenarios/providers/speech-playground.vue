@@ -11,6 +11,7 @@ import { TestDummyMarker } from '../../gadgets'
 const props = defineProps<{
   // Input fields
   defaultText?: string
+  defaultVoice?: string
   availableVoices: VoiceInfo[]
 
   // Provider-specific handlers (provided from parent)
@@ -35,10 +36,12 @@ const selectedVoice = ref('')
 
 // Watch for changes in available voices
 watch(
-  () => props.availableVoices,
-  (newVoices) => {
+  [() => props.availableVoices, () => props.defaultVoice] as const,
+  ([newVoices, defaultVoice]) => {
     if (newVoices.length > 0 && !selectedVoice.value) {
-      selectedVoice.value = newVoices[0]?.id || ''
+      selectedVoice.value = newVoices.some(voice => voice.id === defaultVoice)
+        ? defaultVoice || ''
+        : newVoices[0]?.id || ''
     }
   },
   { immediate: true },

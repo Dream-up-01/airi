@@ -93,21 +93,7 @@ function createHarness(messages: ChatHistoryItem[]) {
   })
 }
 
-/**
- * @example
- * describe('ChatHistory retry actions', () => {
- *   it('emits retry-message when the retry button is clicked for an error after a user message', async () => {})
- * })
- */
 describe('chatHistory retry actions', () => {
-  /**
-   * @example
-   * it('emits retry-message when the retry button is clicked for an error after a user message', async () => {
-   *   const screen = await render(createHarness(messages), { global: { plugins: [createTestI18n()] } })
-   *   await screen.getByRole('button', { name: 'Retry' }).click()
-   *   await expect.element(screen.getByLabelText('retry-index')).toHaveTextContent('1')
-   * })
-   */
   it('emits retry-message when the retry button is clicked for an error after a user message', async () => {
     const messages: ChatHistoryItem[] = [
       { role: 'user', content: 'hello' },
@@ -125,13 +111,6 @@ describe('chatHistory retry actions', () => {
     await expect.element(screen.getByLabelText('retry-index')).toHaveTextContent('1')
   })
 
-  /**
-   * @example
-   * it('does not render the retry button when the error is not preceded by a user message', async () => {
-   *   const screen = await render(createHarness(messages), { global: { plugins: [createTestI18n()] } })
-   *   expect(document.body.textContent).not.toContain('Retry')
-   * })
-   */
   it('does not render the retry button when the error is not preceded by a user message', async () => {
     const messages: ChatHistoryItem[] = [
       { role: 'assistant', content: 'hello', slices: [], tool_results: [] },

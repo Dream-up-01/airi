@@ -275,5 +275,6 @@ export function useProviderValidation(providerId: string) {
     manualTestPassed,
     manualTestMessage,
     runManualTest,
+    validateConfiguration,
   }
 }

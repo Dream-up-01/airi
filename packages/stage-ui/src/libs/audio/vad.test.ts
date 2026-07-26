@@ -43,10 +43,11 @@ class FakeAudioWorkletNode extends FakeAudioNode {
   }
 }
 
-function createVADMock(): BaseVAD {
+function createVADMock(): BaseVAD & { reset: ReturnType<typeof vi.fn> } {
   return {
     initialize: vi.fn(async () => {}),
     processAudio: vi.fn(async () => {}),
+    reset: vi.fn(),
     on: vi.fn(),
     off: vi.fn(),
   }
@@ -70,7 +71,8 @@ describe('createVADStates', () => {
       getTracks: () => [{ stop }],
     } as unknown as MediaStream
 
-    const manager = createVADStates(createVADMock(), '/vad-worklet.js')
+    const vad = createVADMock()
+    const manager = createVADStates(vad, '/vad-worklet.js')
     await manager.initialize()
     await manager.start(stream)
     manager.dispose()
@@ -80,9 +82,8 @@ describe('createVADStates', () => {
 
   it('disconnects the previous microphone source before starting a new graph', async () => {
     // NOTICE:
-    // The page can call start from both the init continuation and the stream/loaded watcher.
+    // Device changes and playback echo gating can rebuild the graph against a new stream.
     // This fake Web Audio graph keeps the regression focused on duplicate source-node wiring.
-    // Source/context: apps/stage-tamagotchi/src/renderer/pages/index.vue can restart VAD around stream changes.
     // Removal condition: replace this with browser-mode Web Audio graph lifecycle coverage.
     const createdSources: FakeAudioNode[] = []
     class ReconnectAudioContext extends FakeAudioContext {
@@ -99,13 +100,43 @@ describe('createVADStates', () => {
       getTracks: () => [],
     } as unknown as MediaStream
 
-    const manager = createVADStates(createVADMock(), '/vad-worklet.js')
+    const vad = createVADMock()
+    const manager = createVADStates(vad, '/vad-worklet.js')
     await manager.initialize()
     await manager.start(stream)
     await manager.start(stream)
 
     expect(createdSources).toHaveLength(2)
     expect(createdSources[0].disconnect).toHaveBeenCalledTimes(1)
+    expect(createdSources[1].disconnect).not.toHaveBeenCalled()
+  })
+
+  it('disconnects microphone input while paused and can rebuild it on resume', async () => {
+    const createdSources: FakeAudioNode[] = []
+    class PausableAudioContext extends FakeAudioContext {
+      createMediaStreamSource = vi.fn(() => {
+        const source = new FakeAudioNode()
+        createdSources.push(source)
+        return source
+      })
+    }
+
+    vi.stubGlobal('AudioContext', PausableAudioContext)
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
+    const stream = { getTracks: () => [] } as unknown as MediaStream
+
+    const vad = createVADMock()
+    const manager = createVADStates(vad, '/vad-worklet.js')
+    await manager.initialize()
+    await manager.start(stream)
+    await manager.stop()
+
+    expect(createdSources[0].disconnect).toHaveBeenCalledTimes(1)
+    expect(vad.reset).toHaveBeenCalledTimes(1)
+
+    await manager.start(stream)
+
+    expect(createdSources).toHaveLength(2)
     expect(createdSources[1].disconnect).not.toHaveBeenCalled()
   })
 })

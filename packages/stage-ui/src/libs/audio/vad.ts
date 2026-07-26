@@ -72,6 +72,12 @@ export function createVADStates(vad: BaseVAD, vadAudioWorkletUrl: string, option
 
   let audioContext = new AudioContext(audioContextOptions)
 
+  function resetVADState() {
+    const reset = Reflect.get(vad, 'reset')
+    if (typeof reset === 'function')
+      Reflect.apply(reset, vad, [])
+  }
+
   async function initialize() {
     if (!audioContext || audioContext.state === 'closed') {
       audioContext = new AudioContext(audioContextOptions)
@@ -142,14 +148,18 @@ export function createVADStates(vad: BaseVAD, vadAudioWorkletUrl: string, option
     }
   }
 
-  function stop() {
-    if (audioContext) {
-      audioContext.suspend()
-    }
+  async function stop() {
+    disconnectInputGraph()
+    mediaStream = null
+    resetVADState()
+
+    if (audioContext && audioContext.state !== 'closed')
+      await audioContext.suspend()
   }
 
   function dispose() {
     disconnectInputGraph()
+    resetVADState()
     if (audioWorkletNode) {
       audioWorkletNode.disconnect()
       audioWorkletNode = null

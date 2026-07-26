@@ -2,31 +2,28 @@
 import { useResizeObserver, useScreenSafeArea } from '@vueuse/core'
 import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle, DialogTrigger, VisuallyHidden } from 'reka-ui'
 import { DrawerContent, DrawerHandle, DrawerOverlay, DrawerPortal, DrawerRoot, DrawerTrigger } from 'vaul-vue'
-import { onMounted, watch } from 'vue'
+import { onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import HearingConfig from './hearing-config.vue'
 
-import { useAudioDevice } from '../../../../composables'
 import { useBreakpoints } from '../../../../composables/use-breakpoints'
 
 const props = defineProps<{
   overlayDim?: boolean
   overlayBlur?: boolean
   granted?: boolean
+  volumeLevel?: number
 }>()
 
 const showDialog = defineModel('show', { type: Boolean, default: false, required: false })
 const autoSend = defineModel<boolean | undefined>('autoSend')
 
 const { isDesktop } = useBreakpoints()
-const { askPermission } = useAudioDevice()
+const { t } = useI18n()
 const screenSafeArea = useScreenSafeArea()
 
 useResizeObserver(document.documentElement, () => screenSafeArea.update())
-watch(showDialog, (show) => {
-  if (show)
-    askPermission()
-})
 onMounted(() => screenSafeArea.update())
 </script>
 
@@ -45,11 +42,12 @@ onMounted(() => screenSafeArea.update())
       />
       <DialogContent class="fixed left-1/2 top-1/2 z-[9999] max-h-full max-w-5xl w-[92dvw] transform overflow-y-scroll rounded-2xl bg-white p-6 shadow-xl outline-none backdrop-blur-md scrollbar-none -translate-x-1/2 -translate-y-1/2 data-[state=closed]:animate-contentHide data-[state=open]:animate-contentShow dark:bg-neutral-900">
         <VisuallyHidden>
-          <DialogTitle>Hearing Input</DialogTitle>
+          <DialogTitle>{{ t('stage.hearing-input.title') }}</DialogTitle>
         </VisuallyHidden>
         <HearingConfig
           v-model:auto-send="autoSend"
           :granted="props.granted"
+          :volume-level="props.volumeLevel"
         />
         <slot name="extra" />
       </DialogContent>
@@ -80,6 +78,7 @@ onMounted(() => screenSafeArea.update())
         <HearingConfig
           v-model:auto-send="autoSend"
           :granted="props.granted"
+          :volume-level="props.volumeLevel"
         />
         <slot name="extra" />
       </DrawerContent>

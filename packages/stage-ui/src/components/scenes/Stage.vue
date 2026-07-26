@@ -5,6 +5,8 @@ import type { SpeechProviderWithExtraOptions } from '@xsai-ext/providers/utils'
 import type { UnElevenLabsOptions } from 'unspeech'
 
 import type { EmotionPayload } from '../../constants/emotions'
+import type { SpeechOutputRoutingProfiles } from '../../domains/speechRouting'
+import type { VoiceStyleDirective } from '../../domains/voiceConversation'
 import type { SpeechTransport, StageTtsSession, StreamingSessionSnapshot } from '../../libs/speech/tts-session'
 
 import { sleep } from '@moeru/std'
@@ -33,6 +35,7 @@ import { useIOTraceBridge } from '../../composables/use-io-trace-bridge'
 import { initIOTracer } from '../../composables/use-io-tracer'
 import { useSpeechPipelineAnalytics } from '../../composables/use-speech-pipeline-analytics'
 import { Emotion, EMOTION_EmotionMotionName_value, EMOTION_VRMExpressionName_value, EmotionThinkMotionName } from '../../constants/emotions'
+import { deriveStageActuationIntentLite, deriveVoiceStyleDirective, voiceStyleCapabilitiesForProvider } from '../../domains/voiceConversation'
 import { getDefaultStreamingModel, getDefinedProvider } from '../../libs/providers/providers'
 import { OFFICIAL_SPEECH_PROVIDER_ID, OFFICIAL_SPEECH_STREAMING_PROVIDER_ID } from '../../libs/providers/providers/official'
 import { bindSpeakingStateToPlaybackManager } from '../../libs/speech/playback-speaking-state'
@@ -46,7 +49,10 @@ import { useSpeechStore } from '../../stores/modules/speech'
 import { useProvidersStore } from '../../stores/providers'
 import { useSettings } from '../../stores/settings'
 import { useSpeechOutputControlStore } from '../../stores/speech-output-control'
+import { useSpeechOutputRoutingStore } from '../../stores/speech-output-routing'
 import { useSpeechRuntimeStore } from '../../stores/speech-runtime'
+import { useVoiceConversationStore } from '../../stores/voiceConversation'
+import { useVoiceStyleRuntimeStore } from '../../stores/voiceStyleRuntime'
 
 const props = withDefaults(defineProps<{
   cursorPosition?: { x: number, y: number }
@@ -91,10 +97,19 @@ const {
 const { mouthOpenSize, nowSpeaking } = storeToRefs(useSpeakingStore())
 const { audioContext } = useAudioContext()
 const currentAudioSource = ref<AudioBufferSourceNode>()
-const { latestStopRequest } = storeToRefs(useSpeechOutputControlStore())
+const speechOutputControlStore = useSpeechOutputControlStore()
+const { latestStopRequest } = storeToRefs(speechOutputControlStore)
 
 const { onBeforeMessageComposed, onBeforeSend, onTokenLiteral, onTokenSpecial, onStreamEnd, onAssistantResponseEnd } = useChatOrchestratorStore()
+const voiceConversationStore = useVoiceConversationStore()
+const voiceStyleRuntimeStore = useVoiceStyleRuntimeStore()
+const { latestResolution: latestVoiceStyleResolution } = storeToRefs(voiceStyleRuntimeStore)
 const chatHookCleanups: Array<() => void> = []
+let voiceLlmFirstTokenNotified = false
+let voiceLlmCompletedNotified = false
+let voiceTtsFirstRequestNotified = false
+let voiceTtsFirstAudioNotified = false
+let voiceTtsFailureNotified = false
 // WORKAROUND: clear previous handlers on unmount to avoid duplicate calls when this component remounts.
 //             We keep per-hook disposers instead of wiping the global chat hooks to play nicely with
 //             cross-window broadcast wiring.
@@ -116,6 +131,12 @@ type PresentEvent
   = | { type: 'assistant-reset' }
     | { type: 'assistant-append', text: string }
 const { post: postPresent } = useBroadcastChannel<PresentEvent, PresentEvent>({ name: 'airi-chat-present' })
+
+function safeRuntimeErrorName(error: unknown) {
+  if (error instanceof Error)
+    return error.name || 'Error'
+  return typeof error === 'string' ? 'StringError' : 'UnknownError'
+}
 
 viewUpdateCleanups.push(live2dStore.onShouldUpdateView(async () => {
   showStage.value = false
@@ -140,20 +161,25 @@ function resetAssistantSpeechSurface(source: string) {
     postCaption({ type: 'caption-assistant', text: '' })
   }
   catch (error) {
-    console.warn(`[Stage] Failed to post caption reset for ${source} (channel may be closed)`, { error })
+    console.warn(`[Stage] Failed to post caption reset for ${source} (channel may be closed)`, {
+      errorName: safeRuntimeErrorName(error),
+    })
   }
 
   try {
     postPresent({ type: 'assistant-reset' })
   }
   catch (error) {
-    console.warn(`[Stage] Failed to post present reset for ${source} (channel may be closed)`, { error })
+    console.warn(`[Stage] Failed to post present reset for ${source} (channel may be closed)`, {
+      errorName: safeRuntimeErrorName(error),
+    })
   }
 }
 
 const { activeCard } = storeToRefs(useAiriCardStore())
 const speechStore = useSpeechStore()
-const { ssmlEnabled, activeSpeechProvider, activeSpeechModel, activeSpeechVoice, pitch } = storeToRefs(speechStore)
+const { ssmlEnabled, activeSpeechProvider, activeSpeechModel, activeSpeechVoice, activeSpeechVoiceId, pitch, rate } = storeToRefs(speechStore)
+const speechOutputRoutingStore = useSpeechOutputRoutingStore()
 const activeCardId = computed(() => activeCard.value?.name ?? 'default')
 const speechRuntimeStore = useSpeechRuntimeStore()
 const { trackOfficialTtsAutoEnabled } = useAnalytics()
@@ -162,6 +188,83 @@ const backgroundStore = useBackgroundStore()
 const { activeBackgroundUrl } = storeToRefs(backgroundStore)
 
 const { currentMotion } = storeToRefs(useLive2dParams())
+
+interface CapturedSpeechOutputProfile {
+  context: 'text-chat' | 'voice-conversation'
+  modelId: string
+  providerId: string
+  voiceId: string
+}
+
+const speechProfilesByIntent = new Map<string, CapturedSpeechOutputProfile>()
+
+/**
+ * Pinia can briefly expose an incomplete store shape while a development
+ * renderer applies a hot update. Treat a missing routing snapshot exactly as
+ * an unconfigured pair of profiles so that an optional TTS feature cannot
+ * prevent the stage (and its display model) from mounting.
+ */
+function currentSpeechOutputRoutingProfiles(): SpeechOutputRoutingProfiles {
+  return speechOutputRoutingStore.profiles ?? {
+    textChat: null,
+    voiceConversation: null,
+  }
+}
+
+function captureSpeechOutputProfile(): CapturedSpeechOutputProfile | null {
+  const context = voiceConversationStore.activeTurnId
+    ? 'voice-conversation'
+    : 'text-chat'
+  const routed = speechOutputRoutingStore.profileFor(context)
+  if (routed.profile) {
+    return {
+      context,
+      ...routed.profile,
+    }
+  }
+
+  // Preserve existing installations until the user configures one of the new
+  // context profiles. Once either profile is deliberate, do not silently use
+  // the other context's output provider for a missing profile.
+  const configuredProfiles = currentSpeechOutputRoutingProfiles()
+  if (configuredProfiles.textChat || configuredProfiles.voiceConversation) {
+    console.warn('[Speech Pipeline] output profile is not configured for context', { context })
+    return null
+  }
+
+  if (!activeSpeechProvider.value || activeSpeechProvider.value === 'speech-noop' || !activeSpeechModel.value || !activeSpeechVoiceId.value)
+    return null
+
+  return {
+    context,
+    modelId: activeSpeechModel.value,
+    providerId: activeSpeechProvider.value,
+    voiceId: activeSpeechVoiceId.value,
+  }
+}
+
+function supportsSSMLForProfile(profile: CapturedSpeechOutputProfile) {
+  return (profile.providerId === 'alibaba-cloud-model-studio' && profile.modelId === 'cosyvoice-v2')
+    || ['elevenlabs', 'microsoft-speech', 'azure-speech'].includes(profile.providerId)
+}
+
+function resolveProfileVoice(profile: CapturedSpeechOutputProfile) {
+  const catalogVoice = speechStore.availableVoices[profile.providerId]?.find(voice => voice.id === profile.voiceId)
+  if (catalogVoice)
+    return catalogVoice
+  if (activeSpeechProvider.value === profile.providerId && activeSpeechVoice.value?.id === profile.voiceId)
+    return activeSpeechVoice.value
+
+  return {
+    id: profile.voiceId,
+    name: profile.voiceId,
+    description: profile.voiceId,
+    previewURL: '',
+    languages: [{ code: 'zh', title: 'Chinese' }],
+    provider: profile.providerId,
+    gender: 'neutral' as const,
+  }
+}
 
 const emotionsQueue = createQueue<EmotionPayload>({
   handlers: [
@@ -210,6 +313,38 @@ function toStageEmotionPayload(payload: { name: string, intensity: number }): Em
       return undefined
   }
 }
+
+const voiceStageActuationIntent = computed(() => {
+  const resolution = latestVoiceStyleResolution.value
+  return deriveStageActuationIntentLite(
+    voiceConversationStore.session,
+    resolution && resolution.turnId === voiceConversationStore.activeTurnId
+      ? resolution.directive
+      : undefined,
+  )
+})
+
+watch(voiceStageActuationIntent, (intent, previous) => {
+  if (!voiceConversationStore.session
+    || (intent.state === previous?.state && intent.emotion === previous?.emotion)) {
+    return
+  }
+
+  const emotion = (() => {
+    switch (intent.emotion) {
+      case 'happy':
+        return Emotion.Happy
+      case 'focused':
+        return Emotion.Think
+      case 'comforting':
+      case 'concerned':
+      case 'neutral':
+      default:
+        return Emotion.Neutral
+    }
+  })()
+  emotionsQueue.enqueue({ name: emotion, intensity: 0.55 })
+})
 
 chatHookCleanups.push(streamingControl.onSignal(async (signal) => {
   if (signal.type === 'act') {
@@ -363,15 +498,69 @@ function trackOfficialAutoTtsForTurn(modelId: string) {
   })
 }
 
+function resolveVoiceStyleForProfile(
+  speechProfile: CapturedSpeechOutputProfile,
+  modelId: string,
+) {
+  const voiceSession = voiceConversationStore.session
+  const turnId = voiceSession?.activeTurnId
+  if (!voiceSession || !turnId)
+    return
+
+  const cardSpeechBinding = activeCard.value?.extensions?.airi?.modules?.speech
+  const resolution = deriveVoiceStyleDirective({
+    policy: voiceStyleRuntimeStore.policyForTurn(turnId),
+    mode: voiceSession.mode,
+    speechBinding: {
+      rate: cardSpeechBinding?.rate,
+      pitchShift: cardSpeechBinding?.pitch,
+    },
+    userPreferences: {
+      rate: rate.value !== 1 ? rate.value : undefined,
+      pitchShift: pitch.value !== 0 ? pitch.value : undefined,
+    },
+    providerCapabilities: voiceStyleCapabilitiesForProvider(speechProfile.providerId, modelId),
+  })
+
+  voiceStyleRuntimeStore.publishResolution({
+    ...resolution,
+    sessionId: voiceSession.sessionId,
+    turnId,
+    providerId: speechProfile.providerId,
+    modelId,
+    resolvedAt: Date.now(),
+  })
+  return resolution
+}
+
+function applyVoiceStyleToProviderConfig(
+  providerConfig: Record<string, unknown>,
+  directive: VoiceStyleDirective | undefined,
+  usesSSML: boolean,
+) {
+  if (!directive)
+    return providerConfig
+
+  return {
+    ...providerConfig,
+    speed: directive.rate,
+    pitch: directive.pitchShift,
+    volume: directive.volume === undefined
+      ? undefined
+      : usesSSML
+        ? (directive.volume - 1) * 100
+        : directive.volume,
+    voiceStyle: directive.style,
+  }
+}
+
 const speechPipeline = createSpeechPipeline<AudioBuffer>({
   tts: async (request, signal) => {
     if (signal.aborted)
       return null
 
-    if (activeSpeechProvider.value === 'speech-noop')
-      return null
-
-    if (!activeSpeechProvider.value)
+    const speechProfile = speechProfilesByIntent.get(request.intentId)
+    if (!speechProfile || speechProfile.providerId === 'speech-noop')
       return null
 
     // Streaming provider must NEVER reach this per-segment callback. The
@@ -382,16 +571,16 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
     // message). The old fallback would silently re-open a fresh ws per
     // segment — exactly the behavior the refactor is meant to delete.
     // Codex review MEDIUM #3: refuse loudly instead.
-    if (resolveSpeechTransport(activeSpeechProvider.value) === 'bidirectional-ws') {
+    if (resolveSpeechTransport(speechProfile.providerId) === 'bidirectional-ws') {
       console.warn('[Speech Pipeline] bidirectional-ws provider reached per-segment fallback', {
         reason: 'streaming session was not opened at intent start (voice unset?)',
-        provider: activeSpeechProvider.value,
-        segment: request.text?.slice(0, 40),
+        provider: speechProfile.providerId,
+        segmentLength: request.text?.length ?? 0,
       })
       return null
     }
 
-    const provider = await providersStore.getProviderInstance(activeSpeechProvider.value) as SpeechProviderWithExtraOptions<string, UnElevenLabsOptions>
+    const provider = await providersStore.getProviderInstance(speechProfile.providerId) as SpeechProviderWithExtraOptions<string, UnElevenLabsOptions>
     if (!provider) {
       console.error('Failed to initialize speech provider')
       return null
@@ -400,14 +589,14 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
     if (!request.text && !request.special)
       return null
 
-    const providerConfig = providersStore.getProviderConfig(activeSpeechProvider.value)
+    const providerConfig = providersStore.getProviderConfig(speechProfile.providerId)
 
     // For OpenAI Compatible providers, always use provider config for model and voice
     // since these are manually configured in provider settings
-    let model = activeSpeechModel.value
-    let voice = activeSpeechVoice.value
+    let model = speechProfile.modelId
+    let voice = resolveProfileVoice(speechProfile)
 
-    if (activeSpeechProvider.value === 'openai-compatible-audio-speech') {
+    if (speechProfile.providerId === 'openai-compatible-audio-speech') {
       // Always prefer provider config for OpenAI Compatible (user configured it there)
       if (providerConfig?.model) {
         model = providerConfig.model as string
@@ -425,7 +614,7 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
           description: providerConfig.voice as string,
           previewURL: '',
           languages: [{ code: 'en', title: 'English' }],
-          provider: activeSpeechProvider.value,
+          provider: speechProfile.providerId,
           gender: 'neutral',
         }
       }
@@ -437,7 +626,7 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
           description: 'alloy',
           previewURL: '',
           languages: [{ code: 'en', title: 'English' }],
-          provider: activeSpeechProvider.value,
+          provider: speechProfile.providerId,
           gender: 'neutral',
         }
         console.warn('[Speech Pipeline] OpenAI Compatible: No voice in provider config, using default', { providerConfig })
@@ -448,21 +637,24 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
       return null
 
     try {
+      const supportsSSML = supportsSSMLForProfile(speechProfile)
+      const voiceStyleResolution = resolveVoiceStyleForProfile(speechProfile, model)
       const speechRequest = speechStore.resolveSpeechInput({
         text: request.text,
         voice,
-        providerConfig: {
-          ...providerConfig,
-          pitch: ssmlEnabled.value ? pitch.value : undefined,
-        },
-        forceSSML: ssmlEnabled.value,
-        supportsSSML: speechStore.supportsSSML,
+        providerConfig: applyVoiceStyleToProviderConfig(
+          providerConfig,
+          voiceStyleResolution?.directive,
+          supportsSSML,
+        ),
+        forceSSML: supportsSSML && (ssmlEnabled.value || !!voiceStyleResolution),
+        supportsSSML,
       })
 
       // Non-streaming providers only: synth via REST. Streaming provider
       // was already early-returned above; it owns its own ws path opened
       // in `onBeforeMessageComposed`.
-      const providerConfigWithAnalytics = activeSpeechProvider.value === OFFICIAL_SPEECH_PROVIDER_ID
+      const providerConfigWithAnalytics = speechProfile.providerId === OFFICIAL_SPEECH_PROVIDER_ID
         ? {
             ...speechRequest.providerConfig,
             extraBody: {
@@ -477,11 +669,14 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
         : speechRequest.providerConfig
       const res = await generateSpeech({
         ...provider.speech(model, providerConfigWithAnalytics),
+        abortSignal: signal,
         input: speechRequest.input,
         voice: voice.id,
       })
 
-      if (signal.aborted || !res || res.byteLength === 0)
+      if (signal.aborted)
+        return null
+      if (!res || res.byteLength === 0)
         return null
 
       const audioBuffer = await audioContext.decodeAudioData(res)
@@ -496,10 +691,10 @@ const speechPipeline = createSpeechPipeline<AudioBuffer>({
       // produce visible diagnostic lines — see codex review item #6.
       if (!signal.aborted) {
         console.error('[Speech Pipeline] tts() failed', {
-          provider: activeSpeechProvider.value,
+          provider: speechProfile.providerId,
           model,
           voice: voice?.id,
-          error: err,
+          errorName: safeRuntimeErrorName(err),
         })
       }
       return null
@@ -529,6 +724,96 @@ speechPipeline.on('onTurnEnd', (turnId) => {
 
 speechPipeline.on('onTurnCancel', ({ turnId }) => {
   streamingControl.cancelTurn(turnId)
+  if (voiceConversationStore.isCurrentTurn(turnId))
+    voiceConversationStore.dispatch({ type: 'interrupt', reason: 'new-turn' })
+})
+
+function notifyVoiceLlmFirstToken() {
+  const turnId = voiceConversationStore.activeTurnId
+  if (!turnId || voiceLlmFirstTokenNotified)
+    return
+
+  voiceConversationStore.dispatch({ type: 'llm-first-token', turnId })
+  voiceLlmFirstTokenNotified = true
+}
+
+function notifyVoiceLlmCompleted() {
+  const turnId = voiceConversationStore.activeTurnId
+  if (!turnId || voiceLlmCompletedNotified)
+    return
+
+  voiceConversationStore.dispatch({ type: 'llm-completed', turnId })
+  voiceLlmCompletedNotified = true
+}
+
+function notifyVoiceTtsFirstRequest(turnId = voiceConversationStore.activeTurnId) {
+  if (!turnId || !voiceConversationStore.isCurrentTurn(turnId) || voiceTtsFirstRequestNotified)
+    return
+
+  voiceConversationStore.dispatch({ type: 'tts-first-request', turnId })
+  voiceTtsFirstRequestNotified = true
+}
+
+function notifyVoiceTtsFirstAudio(turnId = voiceConversationStore.activeTurnId) {
+  if (!turnId || !voiceConversationStore.isCurrentTurn(turnId) || voiceTtsFirstAudioNotified)
+    return
+
+  voiceConversationStore.dispatch({ type: 'tts-first-audio', turnId })
+  voiceTtsFirstAudioNotified = true
+}
+
+function notifyVoiceTtsFailed(turnId = voiceConversationStore.activeTurnId) {
+  if (!turnId || !voiceConversationStore.isCurrentTurn(turnId) || voiceTtsFailureNotified)
+    return
+  if (voiceConversationStore.state !== 'thinking' && voiceConversationStore.state !== 'speaking')
+    return
+
+  voiceConversationStore.dispatch({ type: 'fail', code: 'tts_error', reason: 'tts-error' })
+  voiceTtsFailureNotified = true
+}
+
+function notifyVoicePlaybackStarted(turnId = voiceConversationStore.activeTurnId) {
+  if (!turnId || !voiceConversationStore.isCurrentTurn(turnId) || voiceConversationStore.state === 'speaking')
+    return
+
+  notifyVoiceTtsFirstAudio(turnId)
+  voiceConversationStore.dispatch({ type: 'playback-started', turnId })
+}
+
+function notifyVoicePlaybackCompleted(turnId: string) {
+  if (!voiceConversationStore.isCurrentTurn(turnId) || voiceConversationStore.state !== 'speaking')
+    return
+
+  voiceConversationStore.dispatch({ type: 'playback-completed', turnId })
+  voiceStyleRuntimeStore.clearTurn(turnId)
+}
+
+speechPipeline.on('onTurnEnd', (turnId) => {
+  if (voiceConversationStore.isCurrentTurn(turnId)
+    && voiceConversationStore.state === 'thinking'
+    && voiceTtsFirstRequestNotified
+    && !voiceTtsFirstAudioNotified) {
+    notifyVoiceTtsFailed(turnId)
+    return
+  }
+  notifyVoicePlaybackCompleted(turnId)
+})
+
+speechPipeline.on('onPlaybackReject', ({ item }) => {
+  if (!item.turnId || !voiceConversationStore.isCurrentTurn(item.turnId))
+    return
+  if (voiceConversationStore.state !== 'thinking' && voiceConversationStore.state !== 'speaking')
+    return
+
+  voiceConversationStore.dispatch({ type: 'fail', code: 'playback_error', reason: 'playback-error' })
+})
+
+speechPipeline.on('onTtsRequest', (request) => {
+  notifyVoiceTtsFirstRequest(request.turnId)
+})
+
+speechPipeline.on('onTtsResult', (result) => {
+  notifyVoiceTtsFirstAudio(result.turnId)
 })
 
 function resetSpeakingState() {
@@ -544,6 +829,7 @@ bindSpeakingStateToPlaybackManager(playbackManager, {
       nowSpeaking.value = true
   },
   onStart: ({ item }) => {
+    notifyVoicePlaybackStarted(item.turnId)
     // NOTICE: postCaption and postPresent may throw errors if the BroadcastChannel is closed
     // (e.g., when navigating away from the page). We wrap these in try-catch to prevent
     // breaking playback when the channel is unavailable.
@@ -632,7 +918,7 @@ async function setupLipSync() {
   }
   catch (error) {
     resetLive2dLipSync()
-    console.error('Failed to setup Live2D lip sync', error)
+    console.error('Failed to setup Live2D lip sync.', { errorName: safeRuntimeErrorName(error) })
   }
 }
 
@@ -653,6 +939,7 @@ let currentSession: StageTtsSession | null = null
 function stopSpeechOutput(reason: string) {
   currentSession?.cancel(reason)
   currentSession = null
+  speechProfilesByIntent.clear()
   speechPipeline.stopAll(reason)
   playbackManager.stopAll(reason)
   resetAssistantSpeechSurface(reason)
@@ -717,7 +1004,7 @@ function resolveSpeechTransport(providerId: string | null | undefined): SpeechTr
   return getDefinedProvider(providerId)?.capabilities?.speech?.transport
 }
 
-function openTtsSession(): StageTtsSession {
+function openTtsSession(speechProfile: CapturedSpeechOutputProfile | null): StageTtsSession {
   // A session must only clear the module-level `currentSession` if it IS that session. The previous
   // code cleared it whenever any `stream-` session completed, which is unsafe once sessions exist that
   // are not assigned to `currentSession` (e.g. one-off read-aloud sessions): one of those finishing
@@ -725,16 +1012,19 @@ function openTtsSession(): StageTtsSession {
   // compare identity; the `stream-` guard is preserved so segmenter sessions still don't self-clear.
   let session: StageTtsSession | null = null
   const clearIfActive = () => {
-    if (session && currentSession === session && session.intentId.startsWith('stream-'))
+    if (session && currentSession === session && session.intentId.startsWith('stream-')) {
+      speechProfilesByIntent.delete(session.intentId)
       currentSession = null
+    }
   }
   session = createStageTtsSession<AudioBuffer>({
-    transport: resolveSpeechTransport(activeSpeechProvider.value),
-    streaming: buildStreamingSnapshot,
+    transport: resolveSpeechTransport(speechProfile?.providerId),
+    streaming: speechProfile?.providerId === activeSpeechProvider.value ? buildStreamingSnapshot : undefined,
     audioContext,
     playbackManager,
     openIntent: opts => speechRuntimeStore.openIntent(opts),
     intentOptions: () => ({
+      turnId: voiceConversationStore.activeTurnId,
       ownerId: activeCardId.value,
       priority: 'normal',
       behavior: 'queue',
@@ -742,10 +1032,11 @@ function openTtsSession(): StageTtsSession {
     hooks: {
       onError: (err) => {
         console.error('[Speech Pipeline] streaming session error', {
-          provider: activeSpeechProvider.value,
-          model: activeSpeechModel.value,
-          error: err,
+          provider: speechProfile?.providerId,
+          model: speechProfile?.modelId,
+          errorName: safeRuntimeErrorName(err),
         })
+        notifyVoiceTtsFailed()
         clearIfActive()
       },
       onDone: () => {
@@ -753,6 +1044,11 @@ function openTtsSession(): StageTtsSession {
       },
     },
   })
+  if (speechProfile)
+    speechProfilesByIntent.set(session.intentId, speechProfile)
+  if (session.intentId.startsWith('stream-'))
+    notifyVoiceTtsFirstRequest()
+
   return session
 }
 
@@ -760,11 +1056,26 @@ watch(latestStopRequest, (request) => {
   if (!request)
     return
 
-  stopSpeechOutput(request.reason)
+  try {
+    stopSpeechOutput(request.reason)
+  }
+  finally {
+    // The UI may reopen the microphone only after the component that owns the
+    // real AudioContext source confirms that both active and queued audio were
+    // drained for this exact request.
+    speechOutputControlStore.acknowledgeStopSpeaking(request.id)
+  }
+  if (voiceConversationStore.activeTurnId && (voiceConversationStore.state === 'thinking' || voiceConversationStore.state === 'speaking'))
+    voiceConversationStore.dispatch({ type: 'interrupt', reason: 'user-interrupt' })
 })
 
 chatHookCleanups.push(onBeforeMessageComposed(async () => {
   officialAutoTtsTrackedForTurn = false
+  voiceLlmFirstTokenNotified = false
+  voiceLlmCompletedNotified = false
+  voiceTtsFirstRequestNotified = false
+  voiceTtsFirstAudioNotified = false
+  voiceTtsFailureNotified = false
   playbackManager.stopAll('new-message')
 
   setupAnalyser()
@@ -772,7 +1083,8 @@ chatHookCleanups.push(onBeforeMessageComposed(async () => {
   resetAssistantSpeechSurface('new-message')
 
   currentSession?.cancel('new-message')
-  currentSession = openTtsSession()
+  speechProfilesByIntent.clear()
+  currentSession = openTtsSession(captureSpeechOutputProfile())
 }))
 
 chatHookCleanups.push(onBeforeSend(async () => {
@@ -780,6 +1092,8 @@ chatHookCleanups.push(onBeforeSend(async () => {
 }))
 
 chatHookCleanups.push(onTokenLiteral(async (literal) => {
+  if (literal.trim())
+    notifyVoiceLlmFirstToken()
   currentSession?.appendText(literal)
 }))
 
@@ -788,6 +1102,7 @@ chatHookCleanups.push(onTokenSpecial(async (special) => {
 }))
 
 chatHookCleanups.push(onStreamEnd(async () => {
+  notifyVoiceLlmCompleted()
   currentSession?.finishInput()
 }))
 
@@ -831,6 +1146,28 @@ watch(
     })
     currentSession.cancel('provider-or-voice-changed')
     currentSession = null
+    speechProfilesByIntent.clear()
+  },
+)
+
+watch(
+  () => {
+    const profiles = currentSpeechOutputRoutingProfiles()
+    return [
+      profiles.textChat?.providerId,
+      profiles.textChat?.modelId,
+      profiles.textChat?.voiceId,
+      profiles.voiceConversation?.providerId,
+      profiles.voiceConversation?.modelId,
+      profiles.voiceConversation?.voiceId,
+    ]
+  },
+  (profile, previousProfile) => {
+    if (!currentSession || profile.every((value, index) => value === previousProfile[index]))
+      return
+    currentSession.cancel('provider-or-voice-changed')
+    currentSession = null
+    speechProfilesByIntent.clear()
   },
 )
 
@@ -935,7 +1272,7 @@ async function captureFrame() {
     return new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
   }
   catch (error) {
-    console.error('[Stage] Failed to composite photo with background:', error)
+    console.error('[Stage] Failed to composite photo with background.', { errorName: safeRuntimeErrorName(error) })
     return charBlob // Fallback to character-only
   }
 }

@@ -1,6 +1,14 @@
 # Stage UI
 
-Shared core for stage
+Shared core for stage. Use this package for stage business components, stores,
+provider orchestration, and runtime-neutral stage domain rules.
+
+## Domain modules
+
+- `@proj-airi/stage-ui/domains/companion`: validates and normalizes versioned,
+  secret-free companion presets before application code converts them into an
+  AIRI/CCv3 card. Use it after YAML/JSON parsing and before activation. Do not
+  use it for file IO, Electron IPC, provider credentials, or presentation state.
 
 ## Histoire (UI storyboard)
 

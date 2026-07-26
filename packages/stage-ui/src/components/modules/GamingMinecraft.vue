@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { Callout } from '@proj-airi/ui'
+import { Button, Callout } from '@proj-airi/ui'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { useMinecraftPerceptionControl } from '../../composables/minecraftPerceptionControl'
 import { useMinecraftStore } from '../../stores/modules/gaming-minecraft'
 
 const minecraftStore = useMinecraftStore()
+const perceptionControl = useMinecraftPerceptionControl()
 const { t } = useI18n()
 
 const {
   serviceConnected,
-  latestRuntimeContextText,
   lastRuntimeContextAt,
   runtimeContextAgeMs,
   trafficEntries,
@@ -44,8 +45,18 @@ function formatTrafficTime(timestamp: number) {
   }).format(timestamp)
 }
 
-function formatTrafficPayload(payload: unknown) {
-  return JSON.stringify(payload, null, 2)
+async function enablePerception() {
+  if (perceptionControl)
+    await perceptionControl.start(true)
+  else
+    minecraftStore.enablePerception()
+}
+
+async function disablePerception() {
+  if (perceptionControl)
+    await perceptionControl.stop()
+  else
+    minecraftStore.disablePerception()
 }
 
 onMounted(() => {
@@ -62,6 +73,34 @@ onMounted(() => {
         </div>
       </div>
     </Callout>
+
+    <div :class="['rounded-2xl border border-neutral-200 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/50']">
+      <div :class="['mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100']">
+        {{ t('settings.pages.modules.gaming-minecraft.perception.title') }}
+      </div>
+      <p :class="['mb-3 text-sm text-neutral-600 dark:text-neutral-300']">
+        {{ t('settings.pages.modules.gaming-minecraft.perception.description') }}
+      </p>
+      <div :class="['flex flex-wrap items-center gap-3']">
+        <Button
+          v-if="!minecraftStore.perceptionEnabled"
+          :label="t('settings.pages.modules.gaming-minecraft.perception.enable')"
+          variant="primary"
+          @click="enablePerception"
+        />
+        <Button
+          v-else
+          :label="t('settings.pages.modules.gaming-minecraft.perception.disable')"
+          @click="disablePerception"
+        />
+        <span :class="['text-xs text-neutral-500 dark:text-neutral-400']">
+          {{ t('settings.pages.modules.gaming-minecraft.perception.counts', { accepted: minecraftStore.acceptedFactCount, rejected: minecraftStore.rejectedEventCount, suppressed: minecraftStore.suppressedEventCount }) }}
+        </span>
+      </div>
+      <div v-if="minecraftStore.lastRejectionCode" :class="['mt-3 text-xs text-orange-700 dark:text-orange-300']">
+        {{ t('settings.pages.modules.gaming-minecraft.perception.last-rejection', { code: minecraftStore.lastRejectionCode }) }}
+      </div>
+    </div>
 
     <div :class="['rounded-2xl border border-neutral-200 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/50']">
       <div :class="['mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100']">
@@ -84,16 +123,7 @@ onMounted(() => {
           </div>
           <div>{{ statusLabel }}</div>
         </div>
-        <div>
-          <div :class="['text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400']">
-            {{ t('settings.pages.modules.gaming-minecraft.runtime.latest-context') }}
-          </div>
-          <pre
-            :class="[
-              'mt-2 whitespace-pre-wrap rounded-lg bg-neutral-950/90 p-3 text-xs text-neutral-100',
-            ]"
-          >{{ latestRuntimeContextText || t('settings.pages.modules.gaming-minecraft.runtime.waiting') }}</pre>
-        </div>
+        <div>{{ t('settings.pages.modules.gaming-minecraft.runtime.safe-only') }}</div>
       </div>
     </div>
 
@@ -123,7 +153,9 @@ onMounted(() => {
           <div :class="['mt-1 text-xs text-neutral-500 dark:text-neutral-400']">
             {{ t('settings.pages.modules.gaming-minecraft.debug.source', { source: entry.source }) }}
           </div>
-          <pre :class="['mt-3 overflow-x-auto rounded-lg bg-neutral-950/90 p-3 text-xs text-neutral-100']">{{ formatTrafficPayload(entry.payload) }}</pre>
+          <div :class="['mt-2 text-xs text-neutral-500 dark:text-neutral-400']">
+            {{ t('settings.pages.modules.gaming-minecraft.debug.outcome', { outcome: entry.outcome }) }}
+          </div>
         </div>
       </div>
     </div>

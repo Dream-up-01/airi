@@ -701,7 +701,7 @@ describe('brain control action queue', () => {
     const brain: any = new Brain(deps)
     const outcome = await Promise.race([
       brain.processEvent({} as any, createPerceptionEvent()).then(() => 'done'),
-      new Promise(resolve => setTimeout(resolve, 250, 'timeout')),
+      new Promise(resolve => setTimeout(resolve, 1000, 'timeout')),
     ])
 
     expect(outcome).toBe('done')

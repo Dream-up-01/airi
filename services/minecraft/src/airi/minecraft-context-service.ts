@@ -1,66 +1,69 @@
-import type { ContextUpdate, ModuleAnnouncedEvent } from '@proj-airi/server-sdk'
+import type { ContextUpdate, MinecraftPerceptionWireEvent, ModuleAnnouncedEvent } from '@proj-airi/server-sdk'
 
 import type { MineflayerWithAgents } from '../cognitive/types'
 import type { AiriBridge } from './airi-bridge'
 
-import { ContextUpdateStrategy } from '@proj-airi/server-sdk'
+import {
+  ContextUpdateStrategy,
+  MINECRAFT_PERCEPTION_LANE,
+  MINECRAFT_PERCEPTION_SCHEMA_VERSION,
+} from '@proj-airi/server-sdk'
 import { nanoid } from 'nanoid'
 
 interface MinecraftStatusSnapshot {
-  botUsername: string
-  serverHost: string
-  serverPort: number
-  position: string
-  health: string
-  gameMode: string
-  otherPlayers: string[]
-  /** The owner's in-game username (from BOT_MASTER_USERNAME), if configured. */
-  masterUsername?: string
+  connection: 'connected'
+  playerStatus: 'safe' | 'injured' | 'low-health' | 'hungry' | 'underwater'
+  taskState: 'idle' | 'in-progress' | 'blocked'
+  nearbyThreat: 'none' | 'low' | 'medium' | 'high'
 }
 
-const STATUS_CONTEXT_ID = 'minecraft:status'
-const STATUS_LANE = 'minecraft:status'
 const STATUS_REFRESH_INTERVAL_MS = 5_000
-
-function toPositionString(bot: MineflayerWithAgents) {
-  const position = bot.bot.entity?.position
-  return position
-    ? `x: ${position.x.toFixed(1)}, y: ${position.y.toFixed(1)}, z: ${position.z.toFixed(1)}`
-    : 'unknown'
-}
-
-function buildStatusText(snapshot: MinecraftStatusSnapshot) {
-  return [
-    `Bot online: ${snapshot.botUsername}`,
-    `Server: ${snapshot.serverHost}:${snapshot.serverPort}`,
-    `Position: ${snapshot.position}`,
-    `Health: ${snapshot.health}/20, Mode: ${snapshot.gameMode}`,
-    `Other players online: ${snapshot.otherPlayers.length > 0 ? snapshot.otherPlayers.join(', ') : 'none'}`,
-    ...(snapshot.masterUsername ? [`Master (your owner) in-game username: ${snapshot.masterUsername}`] : []),
-  ].join('\n')
-}
+const STATUS_TTL_MS = 15_000
 
 function collectFrontendDestinations(event: ModuleAnnouncedEvent) {
-  const pluginId = event.identity?.plugin?.id
   const instanceId = event.identity?.id
+  return instanceId ? [`instance:${instanceId}`] : []
+}
 
-  if (!pluginId || !instanceId) {
-    return []
-  }
+function playerStatus(bot: MineflayerWithAgents): MinecraftStatusSnapshot['playerStatus'] {
+  const entity = bot.bot.entity as unknown as { isInWater?: boolean } | undefined
+  if (entity?.isInWater)
+    return 'underwater'
+  if ((bot.bot.health ?? 20) <= 6)
+    return 'low-health'
+  if ((bot.bot.health ?? 20) < 20)
+    return 'injured'
+  if ((bot.bot.food ?? 20) <= 6)
+    return 'hungry'
+  return 'safe'
+}
 
-  return [`instance:${instanceId}`]
+function taskState(bot: MineflayerWithAgents): MinecraftStatusSnapshot['taskState'] {
+  const mode = bot.reflexManager.getMode()
+  if (mode === 'work' || mode === 'wander')
+    return 'in-progress'
+  if (mode === 'alert')
+    return 'blocked'
+  return 'idle'
+}
+
+function threatLevel(bot: MineflayerWithAgents): MinecraftStatusSnapshot['nearbyThreat'] {
+  const score = bot.reflexManager.getContextSnapshot().threat.threatScore
+  if (score >= 3)
+    return 'high'
+  if (score >= 2)
+    return 'medium'
+  if (score > 0)
+    return 'low'
+  return 'none'
 }
 
 export class MinecraftContextService {
   private runtimeBot: MineflayerWithAgents | null = null
   private currentSnapshot: MinecraftStatusSnapshot | null = null
-  private lastPublishedText = ''
   private refreshTimer: ReturnType<typeof setInterval> | null = null
   private unsubscribeModuleAnnounced: (() => void) | null = null
-  private readonly serverHost: string
-  private readonly serverPort: number
-
-  private readonly masterUsername?: string
+  private sequence = 0
 
   constructor(private readonly deps: {
     airiBridge: Pick<AiriBridge, 'onModuleAnnounced' | 'sendContextUpdate'>
@@ -68,39 +71,25 @@ export class MinecraftContextService {
     serverPort: number
     masterUsername?: string
     refreshIntervalMs?: number
-  }) {
-    this.serverHost = deps.serverHost
-    this.serverPort = deps.serverPort
-    this.masterUsername = deps.masterUsername
-  }
+  }) {}
 
   init() {
-    if (this.unsubscribeModuleAnnounced) {
+    if (this.unsubscribeModuleAnnounced)
       return
-    }
 
     this.unsubscribeModuleAnnounced = this.deps.airiBridge.onModuleAnnounced((event) => {
       const destinations = collectFrontendDestinations(event)
-      if (destinations.length === 0) {
-        return
-      }
-
-      this.publishStatus({ force: true, destinations })
+      if (destinations.length > 0)
+        this.publishStatus({ destinations })
     })
   }
 
   bindBot(bot: MineflayerWithAgents) {
     this.runtimeBot = bot
-    this.refreshStatusSnapshot()
-    this.publishStatus({ force: true })
-
-    if (this.refreshTimer) {
+    this.publishStatus()
+    if (this.refreshTimer)
       clearInterval(this.refreshTimer)
-    }
-
-    this.refreshTimer = setInterval(() => {
-      this.publishStatus()
-    }, this.deps.refreshIntervalMs ?? STATUS_REFRESH_INTERVAL_MS)
+    this.refreshTimer = setInterval(() => this.publishStatus(), this.deps.refreshIntervalMs ?? STATUS_REFRESH_INTERVAL_MS)
   }
 
   unbindBot() {
@@ -108,45 +97,20 @@ export class MinecraftContextService {
       clearInterval(this.refreshTimer)
       this.refreshTimer = null
     }
-
+    if (this.currentSnapshot)
+      this.publishSnapshot(this.currentSnapshot, { phase: 'ended' })
     this.runtimeBot = null
     this.currentSnapshot = null
-    this.lastPublishedText = ''
   }
 
-  publishStatus(options: { force?: boolean, destinations?: string[] } = {}) {
+  publishStatus(options: { destinations?: string[] } = {}) {
     const snapshot = this.refreshStatusSnapshot()
-    if (!snapshot) {
-      return
-    }
-
-    const text = buildStatusText(snapshot)
-    if (!options.force && text === this.lastPublishedText) {
-      return
-    }
-
-    const update: ContextUpdate = {
-      id: nanoid(),
-      contextId: STATUS_CONTEXT_ID,
-      lane: STATUS_LANE,
-      text,
-      hints: [
-        'status',
-        snapshot.botUsername,
-      ],
-      strategy: ContextUpdateStrategy.ReplaceSelf,
-    }
-
-    if (options.destinations?.length) {
-      update.destinations = options.destinations
-    }
-
-    this.deps.airiBridge.sendContextUpdate(update)
-    this.lastPublishedText = text
+    if (snapshot)
+      this.publishSnapshot(snapshot, { phase: 'observed', destinations: options.destinations })
   }
 
   getStatusSnapshot() {
-    return this.currentSnapshot ? { ...this.currentSnapshot, otherPlayers: [...this.currentSnapshot.otherPlayers] } : null
+    return this.currentSnapshot ? { ...this.currentSnapshot } : null
   }
 
   destroy() {
@@ -155,26 +119,55 @@ export class MinecraftContextService {
     this.unsubscribeModuleAnnounced = null
   }
 
+  private publishSnapshot(snapshot: MinecraftStatusSnapshot, options: {
+    phase: MinecraftPerceptionWireEvent['phase']
+    destinations?: string[]
+  }) {
+    const observedAt = Date.now()
+    const signals: Array<Pick<MinecraftPerceptionWireEvent, 'eventType' | 'value' | 'confidence'>> = [
+      { eventType: 'connection-health', value: options.phase === 'ended' ? 'disconnected' : snapshot.connection, confidence: 1 },
+      { eventType: 'player-status', value: snapshot.playerStatus, confidence: 1 },
+      { eventType: 'task-state', value: snapshot.taskState, confidence: 1 },
+      { eventType: 'nearby-threat', value: snapshot.nearbyThreat, confidence: 0.95 },
+    ]
+
+    for (const signal of signals) {
+      this.sequence += 1
+      const content: MinecraftPerceptionWireEvent = {
+        schemaVersion: MINECRAFT_PERCEPTION_SCHEMA_VERSION,
+        eventId: nanoid(),
+        sequence: this.sequence,
+        observedAt,
+        ttlMs: STATUS_TTL_MS,
+        eventType: signal.eventType,
+        phase: options.phase,
+        value: signal.value,
+        confidence: signal.confidence,
+      }
+      const update: ContextUpdate<Record<string, unknown>, MinecraftPerceptionWireEvent> = {
+        id: nanoid(),
+        contextId: `minecraft:perception:${signal.eventType}`,
+        lane: MINECRAFT_PERCEPTION_LANE,
+        text: 'Structured Minecraft perception event.',
+        content,
+        strategy: ContextUpdateStrategy.ReplaceSelf,
+      }
+      if (options.destinations?.length)
+        update.destinations = options.destinations
+      this.deps.airiBridge.sendContextUpdate(update)
+    }
+  }
+
   private refreshStatusSnapshot() {
-    if (!this.runtimeBot) {
+    if (!this.runtimeBot)
       return this.currentSnapshot
-    }
-
-    const otherPlayers = Object.keys(this.runtimeBot.bot.players ?? {})
-      .filter(name => name !== this.runtimeBot?.username)
-      .sort((left, right) => left.localeCompare(right))
-
+    this.runtimeBot.reflexManager.refreshFromBotState()
     this.currentSnapshot = {
-      botUsername: this.runtimeBot.username,
-      serverHost: this.serverHost,
-      serverPort: this.serverPort,
-      position: toPositionString(this.runtimeBot),
-      health: String(this.runtimeBot.bot.health ?? 20),
-      gameMode: this.runtimeBot.bot.game?.gameMode ?? 'unknown',
-      otherPlayers,
-      masterUsername: this.masterUsername,
+      connection: 'connected',
+      playerStatus: playerStatus(this.runtimeBot),
+      taskState: taskState(this.runtimeBot),
+      nearbyThreat: threatLevel(this.runtimeBot),
     }
-
     return this.currentSnapshot
   }
 }

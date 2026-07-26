@@ -58,7 +58,7 @@ export class AiriBridge {
 
     this.contextUpdateHandler = (event) => {
       const ctx = event.data
-      this.logger.log('Received context:update', { lane: ctx.lane, preview: ctx.text.slice(0, 80) })
+      this.logger.log('Received context:update', { lane: ctx.lane })
 
       this.eventBus.emit({
         type: 'signal:airi_context',
@@ -127,8 +127,8 @@ export class AiriBridge {
   }
 
   sendContextUpdate(text: string, hints?: string[], lane?: string): void
-  sendContextUpdate(update: ContextUpdate): void
-  sendContextUpdate(textOrUpdate: string | Omit<ContextUpdate, 'strategy' | 'id' | 'contextId'> & { contextId?: string }, hints?: string[], lane = 'game'): void {
+  sendContextUpdate(update: ContextUpdate<Record<string, unknown>, unknown>): void
+  sendContextUpdate(textOrUpdate: string | Omit<ContextUpdate<Record<string, unknown>, unknown>, 'strategy' | 'id' | 'contextId'> & { contextId?: string }, hints?: string[], lane = 'game'): void {
     const update = typeof textOrUpdate === 'string'
       ? {
         text: textOrUpdate,
@@ -149,12 +149,13 @@ export class AiriBridge {
         contextId,
         lane: update.lane,
         text: update.text,
+        content: update.content,
         hints: update.hints,
         strategy: update.strategy,
         destinations: update.destinations,
       },
     } as Parameters<typeof this.client.send>[0])
-    this.logger.log('Sent context:update', { lane: update.lane, preview: update.text.slice(0, 80), contextId })
+    this.logger.log('Sent context:update', { lane: update.lane, contextId })
   }
 
   sendEmit(eventId: string, state: 'queued' | 'working' | 'done' | 'dropped', note?: string): void {

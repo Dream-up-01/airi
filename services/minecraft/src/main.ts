@@ -76,6 +76,15 @@ async function main() {
     url: config.airi.wsBaseUrl,
     token: config.airi.token || undefined,
     possibleEvents: ['module:configure', 'module:announced', 'spark:command', 'context:update'],
+    permissions: {
+      capabilities: [{
+        key: 'perception.minecraft.structured',
+        actions: ['snapshot'],
+        reason: { key: 'permissions.minecraft-perception.reason' },
+        label: { key: 'permissions.minecraft-perception.label' },
+        required: false,
+      }],
+    },
     autoConnect: false,
     // NOTICE:
     // The bot's Node event loop occasionally goes quiet for ~30s (busy mineflayer packet handling /

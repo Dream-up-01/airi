@@ -1,3 +1,4 @@
+import { ContextUpdateStrategy } from '@proj-airi/server-sdk'
 import { describe, expect, it, vi } from 'vitest'
 
 import { AiriBridge } from './airi-bridge'
@@ -17,7 +18,7 @@ function createBridgeHarness() {
   const bridge = new AiriBridge(client as any, eventBus as any)
   bridge.init()
 
-  return { bridge, eventBus, handlers }
+  return { bridge, client, eventBus, handlers }
 }
 
 describe('airiBridge spark command routing', () => {
@@ -61,6 +62,36 @@ describe('airiBridge spark command routing', () => {
       type: 'signal:chat_message',
     }))
 
+    bridge.destroy()
+  })
+
+  it('preserves structured content without logging or rewriting it as text', () => {
+    const { bridge, client } = createBridgeHarness()
+    const content = {
+      schemaVersion: 1,
+      eventId: 'event-1',
+      sequence: 1,
+      observedAt: 1,
+      ttlMs: 15_000,
+      eventType: 'nearby-threat',
+      phase: 'observed',
+      value: 'high',
+      confidence: 0.9,
+    }
+
+    bridge.sendContextUpdate({
+      id: 'context-update-1',
+      contextId: 'minecraft:perception:nearby-threat',
+      lane: 'minecraft:perception:v1',
+      text: 'Structured Minecraft perception event.',
+      content,
+      strategy: ContextUpdateStrategy.ReplaceSelf,
+    })
+
+    expect(client.send).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: 'context:update',
+      data: expect.objectContaining({ content }),
+    }))
     bridge.destroy()
   })
 })

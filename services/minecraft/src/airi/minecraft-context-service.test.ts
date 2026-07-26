@@ -1,16 +1,21 @@
+import { MINECRAFT_PERCEPTION_LANE } from '@proj-airi/server-sdk'
 import { describe, expect, it, vi } from 'vitest'
 
 import { MinecraftContextService } from './minecraft-context-service'
 
-/** Minimal bot stub exposing only the fields refreshStatusSnapshot reads. */
-function fakeBot(): any {
+function fakeBot(overrides: Record<string, unknown> = {}): any {
   return {
     username: 'Airi',
     bot: {
-      entity: { position: { x: 1, y: 2, z: 3 } },
+      entity: { isInWater: false },
       health: 20,
-      game: { gameMode: 'survival' },
-      players: { Airi: {}, dssadg: {}, Bob: {} },
+      food: 20,
+      ...overrides,
+    },
+    reflexManager: {
+      refreshFromBotState: vi.fn(),
+      getMode: vi.fn(() => 'idle'),
+      getContextSnapshot: vi.fn(() => ({ threat: { threatScore: 0 } })),
     },
   }
 }
@@ -23,34 +28,59 @@ function makeService(masterUsername?: string) {
   }
   const service = new MinecraftContextService({
     airiBridge: airiBridge as any,
-    serverHost: '127.0.0.1',
+    serverHost: 'private.example',
     serverPort: 25565,
     masterUsername,
   })
   return { service, captured }
 }
 
-describe('minecraftContextService master identity', () => {
-  it('surfaces the configured master username in the status text only', () => {
-    const { service, captured } = makeService('dssadg')
+describe('minecraft context service', () => {
+  it('publishes only bounded structured perception events without identity or server details', () => {
+    const { service, captured } = makeService('private-owner')
     service.bindBot(fakeBot())
-    const update = captured[0]
-    expect(update.lane).toBe('minecraft:status')
-    expect(update.text).toContain('Master (your owner) in-game username: dssadg')
-    // The owner identity rides only in the human-readable status text (for the bot's own brain). It
-    // must NOT leak as a machine-readable `master:` hint — that was a desktop-store coupling point,
-    // removed in the services/minecraft neutral restore. Desktop "主人" binding is reintroduced via
-    // the Minecraft adapter, not baked into the bot service.
-    expect(update.hints.some((hint: string) => hint.startsWith('master:'))).toBe(false)
+
+    expect(captured).toHaveLength(4)
+    expect(captured.map(update => update.content.eventType)).toEqual([
+      'connection-health',
+      'player-status',
+      'task-state',
+      'nearby-threat',
+    ])
+    expect(captured.every(update => update.lane === MINECRAFT_PERCEPTION_LANE)).toBe(true)
+    expect(captured.every(update => update.content.schemaVersion === 1)).toBe(true)
+    const serialized = JSON.stringify(captured)
+    expect(serialized).not.toContain('private-owner')
+    expect(serialized).not.toContain('private.example')
+    expect(serialized).not.toContain('Airi')
     service.destroy()
   })
 
-  it('omits the master line when no master username is configured', () => {
-    const { service, captured } = makeService(undefined)
+  it('maps health, task and threat to allowlisted values', () => {
+    const { service, captured } = makeService()
+    const bot = fakeBot({ health: 5, food: 4 })
+    bot.reflexManager.getMode.mockReturnValue('alert')
+    bot.reflexManager.getContextSnapshot.mockReturnValue({ threat: { threatScore: 3 } })
+    service.bindBot(bot)
+
+    expect(captured.map(update => [update.content.eventType, update.content.value])).toEqual([
+      ['connection-health', 'connected'],
+      ['player-status', 'low-health'],
+      ['task-state', 'blocked'],
+      ['nearby-threat', 'high'],
+    ])
+    service.destroy()
+  })
+
+  it('publishes ended signals before releasing a bound bot', () => {
+    const { service, captured } = makeService()
     service.bindBot(fakeBot())
-    const update = captured[0]
-    expect(update.hints.some((hint: string) => hint.startsWith('master:'))).toBe(false)
-    expect(update.text).not.toContain('Master (your owner)')
+    captured.length = 0
+    service.unbindBot()
+
+    expect(captured).toHaveLength(4)
+    expect(captured.every(update => update.content.phase === 'ended')).toBe(true)
+    expect(captured[0].content.value).toBe('disconnected')
     service.destroy()
   })
 })

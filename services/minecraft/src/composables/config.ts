@@ -152,5 +152,15 @@ export function initEnv(): void {
   config.airi = parsedConfig.data.airi
   config.debug = parsedConfig.data.debug
 
-  logger.withFields({ config }).log('Environment variables initialized')
+  logger.withFields({
+    runtime: {
+      botHostConfigured: config.bot.host.length > 0,
+      botPort: config.bot.port,
+      botVersionConfigured: !!config.bot.version,
+      airiEndpointConfigured: config.airi.wsBaseUrl.length > 0,
+      openaiEndpointConfigured: config.openai.baseUrl.length > 0,
+      openaiModelConfigured: config.openai.model.length > 0,
+      debug: { ...config.debug },
+    },
+  }).log('Environment variables initialized')
 }

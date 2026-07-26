@@ -1,0 +1,8 @@
+{
+  "modelId": "airi-firefly-v4",
+  "voiceId": "airi-firefly",
+  "referenceAudio": "datasets/airi_voice_v1/wavs/firefly_0001.wav",
+  "referenceText": "木须色拉还有经典苏乐达,你随便挑吧.",
+  "gptWeights": "GPT-SoVITS/GPT_weights_v4/firefly-e50.ckpt",
+  "sovitsWeights": "GPT-SoVITS/SoVITS_weights_v4/firefly_e10_s4420_l32.pth"
+}

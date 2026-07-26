@@ -6,6 +6,8 @@ import type { ServerChannel } from '../../../services/airi/channel-server'
 import type { GodotStageManager } from '../../../services/airi/godot-stage'
 import type { LocalVoiceServiceManager } from '../../../services/airi/local-voice-services'
 import type { McpStdioManager } from '../../../services/airi/mcp-servers'
+import type { LocalScreenConsentRegistry } from '../../../services/airi/perception/local-screen-consent-registry'
+import type { LocalTransformersScreenManager } from '../../../services/airi/perception/local-transformers-screen'
 import type { QwenCloudControlManager } from '../../../services/airi/perception/qwen-cloud-control-manager'
 import type { QwenCloudGrantRegistry } from '../../../services/airi/perception/qwen-cloud-grant-registry'
 import type { QwenCloudMediaGatewayManager } from '../../../services/airi/perception/qwen-cloud-media-gateway-manager'
@@ -29,6 +31,9 @@ import {
 import { createAuthService } from '../../../services/airi/auth'
 import { createGodotStageService } from '../../../services/airi/godot-stage'
 import { createMcpServersService } from '../../../services/airi/mcp-servers'
+import { createLocalScreenCaptureExclusionService } from '../../../services/airi/perception/local-screen-capture-exclusion-service'
+import { createLocalScreenConsentService } from '../../../services/airi/perception/local-screen-consent-service'
+import { createLocalScreenGateway } from '../../../services/airi/perception/local-screen-gateway'
 import { createQwenCloudControlService } from '../../../services/airi/perception/qwen-cloud-control-service'
 import { createQwenCloudGrantService } from '../../../services/airi/perception/qwen-cloud-grant-service'
 import { createQwenCloudMediaGatewayService } from '../../../services/airi/perception/qwen-cloud-media-gateway-service'
@@ -49,6 +54,8 @@ export async function setupSettingsWindowInvokes(params: {
   windowAuthManager: WindowAuthManager
   globalShortcut: GlobalShortcutService
   spotlightWindow: SpotlightWindowManager
+  localScreenConsentRegistry: LocalScreenConsentRegistry
+  localTransformersScreenManager: LocalTransformersScreenManager
   qwenCloudControlManager: QwenCloudControlManager
   qwenCloudGrantRegistry: QwenCloudGrantRegistry
   qwenCloudMediaGatewayManager: QwenCloudMediaGatewayManager
@@ -59,7 +66,10 @@ export async function setupSettingsWindowInvokes(params: {
   ipcMain.setMaxListeners(0)
 
   const { context, dispose } = createContext(ipcMain, params.settingsWindow)
-  const qwenCloudOwnerId = `renderer:${params.settingsWindow.webContents.id}`
+  // Every perception service below registers on process-global `ipcMain` listeners, so each
+  // handler has to verify the caller itself; see `windows/shared/windowScopedInvoke.ts`.
+  const callerWebContentsId = params.settingsWindow.webContents.id
+  const qwenCloudOwnerId = `renderer:${callerWebContentsId}`
   params.settingsWindow.once('closed', () => dispose('settings-window-closed'))
 
   await setupBaseWindowElectronInvokes({ context, window: params.settingsWindow, i18n: params.i18n, serverChannel: params.serverChannel })
@@ -81,20 +91,49 @@ export async function setupSettingsWindowInvokes(params: {
     return params.localVoiceServiceManager.stop(payload.serviceId)
   })
   createAuthService({ context, window: params.settingsWindow, windowAuthManager: params.windowAuthManager })
+
+  // The settings window hosts the full perception control panel, so it needs the same local
+  // screen trio as the main window. Without them a capture started from settings would open a
+  // real MediaStream while its consent/exclusion/gateway invokes were answered by another
+  // window's handlers, leaving the stream running, unregistered and never excluded.
+  // The consent registry and screen manager are the same injected singletons the main window
+  // uses, so `activeSessionId` mutual exclusion stays authoritative across windows.
+  const cleanupLocalScreenConsent = createLocalScreenConsentService({
+    context,
+    registry: params.localScreenConsentRegistry,
+    callerWebContentsId,
+  })
+  const cleanupLocalScreenCaptureExclusion = createLocalScreenCaptureExclusionService({
+    context,
+    registry: params.localScreenConsentRegistry,
+    // Protect the settings window itself: it is the surface in front of the user while they
+    // drive the capture, so it must stay out of the frames this registration feeds.
+    window: params.settingsWindow,
+    callerWebContentsId,
+  })
+  const cleanupLocalScreenGateway = createLocalScreenGateway({
+    context,
+    manager: params.localTransformersScreenManager,
+    consent: params.localScreenConsentRegistry,
+    callerWebContentsId,
+  })
   const cleanupQwenCloudControl = createQwenCloudControlService({
     context,
     manager: params.qwenCloudControlManager,
     mediaGateway: params.qwenCloudMediaGatewayManager,
+    callerWebContentsId,
   })
   const cleanupQwenCloudGrant = createQwenCloudGrantService({
     context,
     registry: params.qwenCloudGrantRegistry,
     ownerId: qwenCloudOwnerId,
     onRevoke: grantId => params.qwenCloudMediaGatewayManager.cancelByGrant(grantId),
+    callerWebContentsId,
   })
   const cleanupQwenCloudMedia = createQwenCloudMediaGatewayService({
     context,
     manager: params.qwenCloudMediaGatewayManager,
+    callerWebContentsId,
   })
   params.settingsWindow.once('closed', () => {
     params.qwenCloudGrantRegistry.clearOwner(qwenCloudOwnerId)
@@ -102,6 +141,13 @@ export async function setupSettingsWindowInvokes(params: {
     cleanupQwenCloudMedia()
     cleanupQwenCloudGrant()
     cleanupQwenCloudControl()
+    cleanupLocalScreenGateway()
+    cleanupLocalScreenCaptureExclusion()
+    // Releases the local screen grants this window registered, and with them the
+    // consent registry's session lock. Deliberately not `clearAll()` like the
+    // main window's teardown: that one runs when the app itself goes away, while
+    // closing settings must leave the main window's live consent untouched.
+    cleanupLocalScreenConsent()
   })
 
   // Register the global shortcut service for the settings window.

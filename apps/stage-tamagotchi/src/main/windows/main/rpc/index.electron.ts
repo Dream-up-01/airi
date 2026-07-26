@@ -61,7 +61,10 @@ export async function setupMainWindowElectronInvokes(params: {
   ipcMain.setMaxListeners(0)
 
   const { context } = createContext(ipcMain, params.window)
-  const qwenCloudOwnerId = `renderer:${params.window.webContents.id}`
+  // Every perception service below registers on process-global `ipcMain` listeners, so each
+  // handler has to verify the caller itself; see `windows/shared/windowScopedInvoke.ts`.
+  const callerWebContentsId = params.window.webContents.id
+  const qwenCloudOwnerId = `renderer:${callerWebContentsId}`
 
   await setupBaseWindowElectronInvokes({ context, window: params.window, serverChannel: params.serverChannel, i18n: params.i18n })
   createWidgetsService({ context, widgetsManager: params.widgetsManager, window: params.window })
@@ -74,31 +77,37 @@ export async function setupMainWindowElectronInvokes(params: {
   const cleanupLocalScreenConsent = createLocalScreenConsentService({
     context,
     registry: params.localScreenConsentRegistry,
+    callerWebContentsId,
   })
   const cleanupLocalScreenCaptureExclusion = createLocalScreenCaptureExclusionService({
     context,
     registry: params.localScreenConsentRegistry,
     window: params.window,
+    callerWebContentsId,
   })
   const cleanupLocalScreenGateway = createLocalScreenGateway({
     context,
     manager: params.localTransformersScreenManager,
     consent: params.localScreenConsentRegistry,
+    callerWebContentsId,
   })
   const cleanupQwenCloudControl = createQwenCloudControlService({
     context,
     manager: params.qwenCloudControlManager,
     mediaGateway: params.qwenCloudMediaGatewayManager,
+    callerWebContentsId,
   })
   const cleanupQwenCloudGrant = createQwenCloudGrantService({
     context,
     registry: params.qwenCloudGrantRegistry,
     ownerId: qwenCloudOwnerId,
     onRevoke: grantId => params.qwenCloudMediaGatewayManager.cancelByGrant(grantId),
+    callerWebContentsId,
   })
   const cleanupQwenCloudMedia = createQwenCloudMediaGatewayService({
     context,
     manager: params.qwenCloudMediaGatewayManager,
+    callerWebContentsId,
   })
   params.window.once('closed', () => {
     params.qwenCloudGrantRegistry.clearOwner(qwenCloudOwnerId)

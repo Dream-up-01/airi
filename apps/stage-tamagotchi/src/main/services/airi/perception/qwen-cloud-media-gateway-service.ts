@@ -2,8 +2,6 @@ import type { createContext } from '@moeru/eventa/adapters/electron/main'
 
 import type { QwenCloudMediaGatewayManager } from './qwen-cloud-media-gateway-manager'
 
-import { defineInvokeHandler, defineStreamInvokeHandler } from '@moeru/eventa'
-
 import {
   electronPerceptionMediaStream,
   electronPerceptionMediaTransportCancel,
@@ -12,22 +10,30 @@ import {
   parsePerceptionMediaTransportStatusRequest,
   PERCEPTION_MEDIA_TRANSPORT_VERSION,
 } from '../../../../shared/eventa/perception'
+import { defineWindowScopedInvokeHandler, defineWindowScopedStreamInvokeHandler } from '../../../windows/shared/windowScopedInvoke'
 
 export function createQwenCloudMediaGatewayService(params: {
   context: ReturnType<typeof createContext>['context']
   manager: QwenCloudMediaGatewayManager
+  /**
+   * `webContents.id` of the renderer allowed to drive this registration.
+   * Required because eventa's electron main listeners are process-global: without it another
+   * window's copy of this service opens the upstream transport first, so media leaves the
+   * device while the window that captured it is told its consent is missing.
+   */
+  callerWebContentsId: number
 }) {
-  defineStreamInvokeHandler(params.context, electronPerceptionMediaStream, async function* (incoming, options) {
+  defineWindowScopedStreamInvokeHandler(params.context, electronPerceptionMediaStream, params.callerWebContentsId, async function* (incoming, options) {
     yield* params.manager.handle(incoming, options?.abortController?.signal)
   })
   const cleanups = [
-    defineInvokeHandler(params.context, electronPerceptionMediaTransportStatus, (input) => {
+    defineWindowScopedInvokeHandler(params.context, electronPerceptionMediaTransportStatus, params.callerWebContentsId, (input) => {
       const parsed = parsePerceptionMediaTransportStatusRequest(input)
       if (!parsed.ok)
         throw new Error(parsed.errorCode)
       return params.manager.status(parsed.value)
     }),
-    defineInvokeHandler(params.context, electronPerceptionMediaTransportCancel, (input) => {
+    defineWindowScopedInvokeHandler(params.context, electronPerceptionMediaTransportCancel, params.callerWebContentsId, (input) => {
       const parsed = parsePerceptionMediaTransportCancelRequest(input)
       if (!parsed.ok)
         throw new Error(parsed.errorCode)

@@ -26,17 +26,40 @@ export class LocalScreenConsentRegistryError extends Error {
 }
 
 interface ActiveGrant {
+  /** Window that registered the grant; see {@link LocalScreenConsentRegistry.clearOwner}. */
+  ownerId: string
   sessionId: string
   generation: number
   grant: PerceptionConsentGrant
 }
 
+/**
+ * Default owner for grants registered without one. Kept identical in shape to
+ * the real `renderer:<webContentsId>` ids so an unowned grant can never be
+ * released by {@link LocalScreenConsentRegistry.clearOwner} for a real window.
+ */
+const unknownOwnerId = 'renderer:unknown'
+
 export interface LocalScreenConsentRegistry {
-  register: (request: LocalScreenConsentRegisterRequest | unknown) => LocalScreenConsentSnapshot
+  register: (request: LocalScreenConsentRegisterRequest | unknown, ownerId?: string) => LocalScreenConsentSnapshot
   revoke: (request: LocalScreenConsentRevokeRequest | unknown) => LocalScreenConsentSnapshot
   status: (request: LocalScreenConsentStatusRequest | unknown) => LocalScreenConsentSnapshot
   isActive: (grantId: string, sessionId: string, generation: number) => boolean
   clearAll: () => void
+  /**
+   * Releases the grants registered by one window and returns their ids.
+   *
+   * Use when:
+   * - The window that registered them is gone (closed) while other windows must
+   *   keep theirs — `clearAll()` is only correct when the whole app is quitting.
+   *
+   * Expects:
+   * - `ownerId` exactly as passed to `register`.
+   *
+   * Returns:
+   * - The released grant ids, empty when this owner held none.
+   */
+  clearOwner: (ownerId: string) => string[]
 }
 
 export function createLocalScreenConsentRegistry(options: { now?: () => number } = {}): LocalScreenConsentRegistry {
@@ -47,7 +70,7 @@ export function createLocalScreenConsentRegistry(options: { now?: () => number }
   let activeGeneration = 0
   let updatedAt = now()
 
-  function register(input: LocalScreenConsentRegisterRequest | unknown): LocalScreenConsentSnapshot {
+  function register(input: LocalScreenConsentRegisterRequest | unknown, ownerId = unknownOwnerId): LocalScreenConsentSnapshot {
     const parsed = parseLocalScreenConsentRegisterRequest(input)
     if (!parsed.ok)
       throw new LocalScreenConsentRegistryError(parsed.errorCode)
@@ -67,6 +90,7 @@ export function createLocalScreenConsentRegistry(options: { now?: () => number }
     activeGeneration = request.generation
     latestGenerations.set(request.sessionId, request.generation)
     activeGrants.set(request.grant.grantId, {
+      ownerId,
       sessionId: request.sessionId,
       generation: request.generation,
       grant: cloneGrant(request.grant),
@@ -134,6 +158,31 @@ export function createLocalScreenConsentRegistry(options: { now?: () => number }
     updatedAt = Math.max(updatedAt, now())
   }
 
+  function clearOwner(ownerId: string): string[] {
+    const releasedGrantIds: string[] = []
+    for (const [grantId, entry] of activeGrants) {
+      if (entry.ownerId !== ownerId)
+        continue
+      activeGrants.delete(grantId)
+      releasedGrantIds.push(grantId)
+    }
+    if (releasedGrantIds.length === 0)
+      return releasedGrantIds
+
+    // `activeSessionId`/`activeGeneration` are this registry's mutual-exclusion
+    // lock: while they still point at the departed window's session, every
+    // other window's register() answers `session-conflict`. Releasing the last
+    // grant has to release the lock too, exactly as revoke() does.
+    if (activeGrants.size === 0) {
+      activeSessionId = ''
+      activeGeneration = 0
+    }
+    // `latestGenerations` is deliberately kept: it is the replay guard, and a
+    // window that comes back with a stale generation must still be rejected.
+    updatedAt = Math.max(updatedAt, now())
+    return releasedGrantIds
+  }
+
   function snapshot(sessionId: string, generation: number): LocalScreenConsentSnapshot {
     const grants = [...activeGrants.values()]
       .filter(entry => entry.sessionId === sessionId && entry.generation === generation)
@@ -147,7 +196,7 @@ export function createLocalScreenConsentRegistry(options: { now?: () => number }
     }
   }
 
-  return { register, revoke, status, isActive, clearAll }
+  return { register, revoke, status, isActive, clearAll, clearOwner }
 }
 
 export function setupLocalScreenConsentRegistry(options: { now?: () => number } = {}) {

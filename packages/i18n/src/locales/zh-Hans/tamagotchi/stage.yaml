@@ -212,6 +212,9 @@ perception-minecraft:
     revoke: 撤销设备
     empty: 暂无待批准请求。连接 Mod 后，配对请求会自动显示在这里。
     error: 无法读取配对状态，请确认当前运行的是更新后的 AIRI。
+    notification:
+      title: Minecraft 配对请求
+      body: '{device} 正在等待配对。请确认游戏中显示的验证码是 {code}，然后在这里批准。'
   state:
     off: 游戏感知未开启
     waiting: 正在等待已认证运行端

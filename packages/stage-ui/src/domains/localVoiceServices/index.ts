@@ -10,6 +10,13 @@ export type LocalVoiceServiceStartErrorCode
     | 'launch_failed'
     | 'startup_timeout'
     | 'app_stopping'
+    /**
+     * A stop for the same service was requested while this start was still
+     * probing or waiting for readiness, so the start terminated the process it
+     * had spawned instead of leaving it unmanaged. Distinct from
+     * `app_stopping`, which means the whole app is quitting.
+     */
+    | 'start_cancelled'
 
 export type LocalVoiceServiceStartResult
   = | {

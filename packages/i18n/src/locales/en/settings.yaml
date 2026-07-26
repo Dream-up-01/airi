@@ -934,6 +934,7 @@ pages:
             launch_failed: The selected local ASR could not be started. Check the local model environment.
             startup_timeout: The selected local ASR did not become ready before the startup timeout.
             app_stopping: AIRI is closing, so the local ASR cannot be switched.
+            start_cancelled: The local ASR was stopped while it was still starting, so the startup was cancelled.
             validation_failed: The local ASR failed its health check; the previous model remains active.
             unexpected: The local ASR switch failed; the previous model remains active.
           notices:
@@ -1006,6 +1007,7 @@ pages:
           launch_failed: The local speech service could not start; check the model environment.
           startup_timeout: The local speech service did not become ready before the startup timeout.
           app_stopping: AIRI is stopping, so the local speech service cannot be switched.
+          start_cancelled: The local speech service was stopped while it was still starting, so the startup was cancelled.
           validation_failed: The local speech service failed its health check; the previous provider remains active.
           unexpected: The speech provider switch failed; the previous provider remains active.
         notices:
@@ -1383,6 +1385,7 @@ pages:
             launch_failed: Qwen3-ASR could not be started. Check WSL2 and the local model environment.
             startup_timeout: Qwen3-ASR did not become ready before the startup timeout.
             app_stopping: AIRI is closing, so the local service was not started.
+            start_cancelled: The local service was stopped while it was still starting, so the startup was cancelled.
           validation_invalid_endpoint: Enter a local endpoint such as http://127.0.0.1:8001/.
           validation_not_ready: Qwen3-ASR is still loading or unhealthy. Wait for startup to complete and try again.
           validation_not_streaming: This endpoint only provides batch transcription. Start AIRI's Qwen3-ASR streaming bridge.
@@ -1420,6 +1423,7 @@ pages:
             launch_failed: SenseVoice could not be started. Check the local runtime and model files.
             startup_timeout: SenseVoice did not become ready before the startup timeout.
             app_stopping: AIRI is closing, so the local service was not started.
+            start_cancelled: The local service was stopped while it was still starting, so the startup was cancelled.
           validation_invalid_endpoint: Enter a local SenseVoice endpoint, for example http://127.0.0.1:8765/v1/.
           validation_not_ready: SenseVoice did not report a ready service. Use the validation button to start it, then try again.
           validation_unreachable: Cannot reach SenseVoice. Use the validation button to start it.
@@ -1778,6 +1782,7 @@ pages:
             launch_failed: GPT-SoVITS could not be started. Check the local runtime and model files.
             startup_timeout: GPT-SoVITS did not become ready before the startup timeout.
             app_stopping: AIRI is closing, so the local service was not started.
+            start_cancelled: The local service was stopped while it was still starting, so the startup was cancelled.
           validation_invalid_endpoint: Local GPT-SoVITS can only use a localhost or 127.0.0.1 endpoint.
           validation_not_ready: Local GPT-SoVITS is unavailable or still loading its model.
           validation_unreachable: Local GPT-SoVITS is not running. Use the validation button to start it.

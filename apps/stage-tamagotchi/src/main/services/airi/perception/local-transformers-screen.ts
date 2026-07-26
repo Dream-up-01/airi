@@ -70,6 +70,14 @@ export interface LocalTransformersScreenManager {
 }
 
 interface LocalTransformersScreenManagerOptions {
+  /**
+   * Electron `app.getAppPath()`. Ancestors of this directory (up to
+   * {@link appPathAncestorLevels}) become trusted service roots only when they
+   * contain the `pnpm-workspace.yaml` monorepo marker, so packaged installs
+   * (whose ancestors are arbitrary directories) resolve nothing and degrade to
+   * `runtime-unavailable`.
+   */
+  appPath?: string
   fetchImpl?: typeof fetch
   fileExists?: (path: string) => boolean
   gracefulStopTimeoutMs?: number
@@ -134,7 +142,7 @@ export function createLocalTransformersScreenManager(
     if (active)
       await stopActive()
 
-    const servicePath = resolveServicePath(fileExists, options.projectRoot)
+    const servicePath = resolveServicePath(fileExists, options.projectRoot, options.appPath)
     if (!servicePath) {
       lastStatus = failedStatus(request, 'runtime-unavailable')
       throw new LocalScreenGatewayError('runtime-unavailable')
@@ -174,6 +182,18 @@ export function createLocalTransformersScreenManager(
       token,
     }
     active = current
+    // Node delivers asynchronous spawn failures via 'error', and an
+    // EventEmitter 'error' without a listener throws an uncaught exception that
+    // would crash the main process. `wsl.exe` is absent on any machine without
+    // WSL, so this path is routinely reachable. Attach synchronously, before
+    // any await, so no delivery timing can leave the event unhandled.
+    child.once('error', () => {
+      if (active !== current)
+        return
+      active = undefined
+      if (!stopping && lastStatus.state !== 'stopping' && lastStatus.state !== 'stopped')
+        lastStatus = failedStatus(request, 'runtime-unavailable')
+    })
     child.once('exit', () => {
       if (active !== current)
         return
@@ -314,25 +334,61 @@ export function setupLocalTransformersScreenManager(options: LocalTransformersSc
   return manager
 }
 
-function candidateProjectRoots(explicitRoot?: string): string[] {
+/**
+ * Marker file identifying the AIRI monorepo root. appPath-derived candidate
+ * roots are trusted only when this marker is present, so packaged installs
+ * (whose ancestors are arbitrary directories) never resolve a service script
+ * there.
+ */
+const workspaceRootMarker = 'pnpm-workspace.yaml'
+
+// NOTICE:
+// In dev the Electron appPath sits 2 levels below the monorepo root
+// (apps/stage-tamagotchi); 4 levels leaves headroom for build output
+// directories without scanning far up the filesystem.
+// Removal condition: appPath-relative service resolution is replaced by an
+// explicit configured root.
+const appPathAncestorLevels = 4
+
+/**
+ * Collects directories trusted to contain the local perception service script.
+ *
+ * Trust model:
+ * - `explicitRoot` (options.projectRoot) and the `AIRI_PROJECT_ROOT`
+ *   environment variable are deliberate user configuration, trusted as-is.
+ * - `appPath` and up to {@link appPathAncestorLevels} ancestors are trusted
+ *   only when they carry {@link workspaceRootMarker} (a dev checkout).
+ * - `process.cwd()` is never trusted: walking cwd ancestors would hand a
+ *   third-party `server.py` at the same relative path to the WSL python
+ *   interpreter whenever the app is launched from an untrusted directory.
+ */
+function candidateProjectRoots(
+  fileExists: (path: string) => boolean,
+  explicitRoot?: string,
+  appPath?: string,
+): string[] {
   const roots = new Set<string>()
   if (explicitRoot?.trim())
     roots.add(resolve(explicitRoot))
   if (process.env.AIRI_PROJECT_ROOT?.trim())
     roots.add(resolve(process.env.AIRI_PROJECT_ROOT))
-  let current = resolve(process.cwd())
-  for (let depth = 0; depth < 6; depth += 1) {
-    roots.add(current)
-    const parent = dirname(current)
-    if (parent === current)
-      break
-    current = parent
+
+  if (appPath?.trim()) {
+    let current = resolve(appPath)
+    for (let depth = 0; depth <= appPathAncestorLevels; depth += 1) {
+      if (fileExists(resolve(current, workspaceRootMarker)))
+        roots.add(current)
+      const parent = dirname(current)
+      if (parent === current)
+        break
+      current = parent
+    }
   }
   return [...roots]
 }
 
-function resolveServicePath(fileExists: (path: string) => boolean, explicitRoot?: string): string | undefined {
-  for (const root of candidateProjectRoots(explicitRoot)) {
+function resolveServicePath(fileExists: (path: string) => boolean, explicitRoot?: string, appPath?: string): string | undefined {
+  for (const root of candidateProjectRoots(fileExists, explicitRoot, appPath)) {
     const candidate = resolve(root, SERVICE_RELATIVE_PATH)
     if (fileExists(candidate))
       return candidate

@@ -906,6 +906,7 @@ pages:
             launch_failed: 无法启动所选本地 ASR，请检查本地模型环境。
             startup_timeout: 所选本地 ASR 在限定时间内未完成启动。
             app_stopping: AIRI 正在退出，无法切换本地 ASR。
+            start_cancelled: 本地 ASR 启动过程中被停止，已取消本次启动。
             validation_failed: 本地 ASR 未通过健康验证，已保留原模型。
             unexpected: 切换本地 ASR 时发生错误，已保留原模型。
           notices:
@@ -973,6 +974,7 @@ pages:
           launch_failed: 本地语音服务启动失败，请检查模型环境。
           startup_timeout: 本地语音服务在限定时间内未完成启动。
           app_stopping: AIRI 正在退出，无法切换本地语音服务。
+          start_cancelled: 本地语音服务启动过程中被停止，已取消本次启动。
           validation_failed: 本地语音服务未通过健康检查，已保留原 Provider。
           unexpected: 切换语音 Provider 时发生错误，已保留原 Provider。
         notices:
@@ -1333,6 +1335,7 @@ pages:
             launch_failed: 无法启动 Qwen3-ASR，请检查 WSL2 和本地模型环境。
             startup_timeout: Qwen3-ASR 在限定时间内未完成启动。
             app_stopping: AIRI 正在退出，本地服务未启动。
+            start_cancelled: 本地服务启动过程中被停止，已取消本次启动。
           validation_invalid_endpoint: 请输入本机地址，例如 http://127.0.0.1:8001/。
           validation_not_ready: Qwen3-ASR 模型仍在加载或服务异常，请等待启动完成后重试。
           validation_not_streaming: 该端点只是批量转写服务，不接受持续麦克风音频。请启动 AIRI 的 Qwen3-ASR streaming bridge。
@@ -1370,6 +1373,7 @@ pages:
             launch_failed: 无法启动 SenseVoice，请检查本地运行环境和模型文件。
             startup_timeout: SenseVoice 在限定时间内未完成启动。
             app_stopping: AIRI 正在退出，本地服务未启动。
+            start_cancelled: 本地服务启动过程中被停止，已取消本次启动。
           validation_invalid_endpoint: 请输入本机 SenseVoice 地址，例如 http://127.0.0.1:8765/v1/。
           validation_not_ready: SenseVoice 未报告就绪状态，请使用验证按钮启动后重试。
           validation_unreachable: 无法连接 SenseVoice，请使用验证按钮启动。
@@ -1724,6 +1728,7 @@ pages:
             launch_failed: 无法启动 GPT-SoVITS，请检查本地运行环境和模型文件。
             startup_timeout: GPT-SoVITS 在限定时间内未完成启动。
             app_stopping: AIRI 正在退出，本地服务未启动。
+            start_cancelled: 本地服务启动过程中被停止，已取消本次启动。
           validation_invalid_endpoint: 本地 GPT-SoVITS 只能使用 localhost 或 127.0.0.1 地址。
           validation_not_ready: 本地 GPT-SoVITS 尚未就绪或仍在加载模型。
           validation_unreachable: 本地 GPT-SoVITS 尚未运行，请使用验证按钮启动。

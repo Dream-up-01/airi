@@ -212,6 +212,9 @@ perception-minecraft:
     revoke: Revoke device
     empty: No pairing request is waiting. A request will appear here after the Mod connects.
     error: Pairing status is unavailable. Confirm that the updated AIRI build is running.
+    notification:
+      title: Minecraft pairing request
+      body: '{device} is waiting to pair. Confirm that the game shows code {code}, then approve it here.'
   state:
     off: Game perception off
     waiting: Waiting for authenticated runtime

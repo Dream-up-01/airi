@@ -2,7 +2,10 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process'
 
 import type { LocalTransformersScreenValidationResult } from '@proj-airi/stage-ui/services/perception'
 
+import process from 'node:process'
+
 import { EventEmitter } from 'node:events'
+import { resolve } from 'node:path'
 
 import { describe, expect, it, vi } from 'vitest'
 
@@ -169,5 +172,107 @@ describe('local Transformers screen manager', () => {
       sessionId: 'session:local-screen',
       generation: 1,
     })).toMatchObject({ state: 'failed', errorCode: 'runtime-cancelled' })
+  })
+
+  // Found by code review 2026-07-26 (M2 voice review, sibling-module sweep)
+  //
+  // ROOT CAUSE:
+  //
+  // candidateProjectRoots() walked process.cwd() plus six ancestor
+  // directories and resolveServicePath() handed the first matching
+  // `services/perception-qwen3-vl-transformers/server.py` straight to the WSL
+  // python interpreter:
+  //
+  //   let current = resolve(process.cwd())
+  //   for (let depth = 0; depth < 6; depth += 1) { roots.add(current) ... }
+  //
+  // Launching AIRI from an untrusted directory (e.g. a portable build under
+  // Downloads) whose ancestor happened to carry that relative path therefore
+  // executed a third-party script with the user's privileges.
+  //
+  // We fixed this by never trusting cwd: only options.projectRoot, the
+  // AIRI_PROJECT_ROOT env var, and appPath ancestors that carry the
+  // pnpm-workspace.yaml monorepo marker are candidate roots.
+  it('does not resolve the service script from cwd ancestors', async () => {
+    const spawnProcess = vi.fn(() => fakeChild())
+    const cwdAncestorScript = resolve(process.cwd(), '..', 'services/perception-qwen3-vl-transformers/server.py')
+    const manager = createLocalTransformersScreenManager({
+      fetchImpl: vi.fn(async () => healthResponse()) as typeof fetch,
+      // Only the untrusted cwd-ancestor script exists; no trusted root does.
+      fileExists: (path: string) => path === cwdAncestorScript,
+      gracefulStopTimeoutMs: 0,
+      randomToken: () => 'd'.repeat(43),
+      runtimeFactory: () => fakeRuntime(),
+      spawnProcess,
+    })
+
+    await expect(manager.validate(request())).rejects.toEqual(new LocalScreenGatewayError('runtime-unavailable'))
+    expect(spawnProcess).not.toHaveBeenCalled()
+  })
+
+  it('resolves the service script from appPath ancestors carrying the workspace marker', async () => {
+    const child = fakeChild()
+    const spawnProcess = vi.fn(() => child)
+    const workspaceRoot = resolve('D:/Projects/airi')
+    const appPath = resolve(workspaceRoot, 'apps/stage-tamagotchi')
+    const manager = createLocalTransformersScreenManager({
+      appPath,
+      fetchImpl: vi.fn(async () => healthResponse()) as typeof fetch,
+      fileExists: (path: string) => path === resolve(workspaceRoot, 'pnpm-workspace.yaml')
+        || path === resolve(workspaceRoot, 'services/perception-qwen3-vl-transformers/server.py'),
+      gracefulStopTimeoutMs: 0,
+      randomToken: () => 'e'.repeat(43),
+      runtimeFactory: () => fakeRuntime(),
+      spawnProcess,
+    })
+
+    await expect(manager.validate(request())).resolves.toMatchObject({ state: 'ready' })
+    expect(spawnProcess).toHaveBeenCalledTimes(1)
+  })
+
+  // Found by code review 2026-07-26 (M2 voice review, sibling-module sweep)
+  //
+  // ROOT CAUSE:
+  //
+  // The spawned `wsl.exe` child only had an 'exit' listener:
+  //
+  //   child.once('exit', () => { ... })
+  //
+  // Node delivers asynchronous spawn failures via 'error', and an
+  // EventEmitter 'error' with no listener throws an uncaught exception. Since
+  // `wsl.exe` is absent on every machine without WSL installed, validating the
+  // local screen runtime there crashed the Electron main process instead of
+  // reporting a runtime error.
+  //
+  // We fixed this by attaching an 'error' listener synchronously alongside the
+  // 'exit' listener, marking the runtime unavailable.
+  it('reports runtime-unavailable instead of crashing when the spawned process emits an async error', async () => {
+    const child = fakeChild()
+    const manager = createLocalTransformersScreenManager({
+      // Never becomes healthy: the spawn failure is the only outcome.
+      fetchImpl: vi.fn(async () => {
+        throw new Error('connection refused')
+      }) as unknown as typeof fetch,
+      fileExists: () => true,
+      gracefulStopTimeoutMs: 0,
+      pollIntervalMs: 0,
+      projectRoot: 'D:/Projects/airi',
+      randomToken: () => 'f'.repeat(43),
+      runtimeFactory: () => fakeRuntime(),
+      spawnProcess: vi.fn(() => {
+        // Mirrors Node's asynchronous ENOENT delivery for a missing wsl.exe.
+        queueMicrotask(() => child.emit('error', new Error('spawn wsl.exe ENOENT')))
+        return child
+      }),
+      startupTimeoutMs: 0,
+      terminateProcess: vi.fn(async () => undefined),
+    })
+
+    await expect(manager.validate(request())).rejects.toBeInstanceOf(LocalScreenGatewayError)
+    expect(manager.status({
+      contractVersion: LOCAL_SCREEN_GATEWAY_VERSION,
+      sessionId: 'session:local-screen',
+      generation: 1,
+    })).toMatchObject({ state: 'failed' })
   })
 })

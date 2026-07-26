@@ -2,6 +2,7 @@ import type { Server, ServerOptions } from '@proj-airi/server-runtime/server'
 import type { Lifecycle } from 'injeca'
 
 import type { ElectronServerChannelConfig } from '../../../../shared/eventa'
+import type { MinecraftPairingNotifier } from './minecraft-pairing'
 
 import { randomUUID, X509Certificate } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -360,6 +361,24 @@ async function getOrCreateCertificate() {
 
   const caCert = existsSync(caCertPath) ? readFileSync(caCertPath, 'utf-8') : undefined
   return { cert: withCertificateChain(cert, caCert), key }
+}
+
+/**
+ * Attaches an out-of-band pairing approval surface to the process-wide Minecraft
+ * pairing manager.
+ *
+ * Use when:
+ * - Composing the main process, once the collaborators the notifier needs (the
+ *   settings window manager) have been built
+ *
+ * Expects:
+ * - To be called at most once per notifier; a later call replaces the port
+ *
+ * Returns:
+ * - Nothing; the pairing manager keeps working unchanged if the notifier fails
+ */
+export function attachMinecraftPairingNotifier(notifier: MinecraftPairingNotifier): void {
+  minecraftPairingManager.setNotifier(notifier)
 }
 
 export async function setupServerChannel(params: { lifecycle: Lifecycle }): Promise<Server> {

@@ -2,8 +2,6 @@ import type { createContext } from '@moeru/eventa/adapters/electron/main'
 
 import type { LocalTransformersScreenManager } from './local-transformers-screen'
 
-import { defineInvokeHandler } from '@moeru/eventa'
-
 import {
   electronLocalScreenAnalyze,
   electronLocalScreenStatus,
@@ -18,6 +16,7 @@ import {
   parseLocalScreenGatewayStopRequest,
   parseLocalScreenGatewayValidateRequest,
 } from '../../../../shared/eventa/perception-local-screen'
+import { defineWindowScopedInvokeHandler } from '../../../windows/shared/windowScopedInvoke'
 import { LocalScreenGatewayError } from './local-transformers-screen'
 
 export interface LocalScreenGatewayConsentVerifier {
@@ -28,9 +27,16 @@ export function createLocalScreenGateway(params: {
   context: ReturnType<typeof createContext>['context']
   manager: LocalTransformersScreenManager
   consent: LocalScreenGatewayConsentVerifier
+  /**
+   * `webContents.id` of the renderer allowed to drive this registration's runtime.
+   * Required because eventa's electron main listeners are process-global, so without it
+   * one window's frames would also be analyzed and stopped by every other window's copy
+   * of this gateway.
+   */
+  callerWebContentsId: number
 }) {
   const cleanups = [
-    defineInvokeHandler(params.context, electronLocalScreenValidate, async (input, options) => {
+    defineWindowScopedInvokeHandler(params.context, electronLocalScreenValidate, params.callerWebContentsId, async (input, options) => {
       const parsed = parseLocalScreenGatewayValidateRequest(input)
       if (!parsed.ok)
         throw new LocalScreenGatewayError(parsed.errorCode)
@@ -39,7 +45,7 @@ export function createLocalScreenGateway(params: {
         throw new LocalScreenGatewayError('consent-missing')
       return await params.manager.validate(request, options?.abortController?.signal)
     }),
-    defineInvokeHandler(params.context, electronLocalScreenAnalyze, async (incoming, options) => {
+    defineWindowScopedInvokeHandler(params.context, electronLocalScreenAnalyze, params.callerWebContentsId, async (incoming, options) => {
       const signal = options?.abortController?.signal
       let open: Extract<import('../../../../shared/eventa/perception-local-screen').LocalScreenAnalyzeMessage, { type: 'open' }> | undefined
       let completed = false
@@ -110,13 +116,13 @@ export function createLocalScreenGateway(params: {
         jpegFrames.length = 0
       }
     }),
-    defineInvokeHandler(params.context, electronLocalScreenStop, async (input) => {
+    defineWindowScopedInvokeHandler(params.context, electronLocalScreenStop, params.callerWebContentsId, async (input) => {
       const parsed = parseLocalScreenGatewayStopRequest(input)
       if (!parsed.ok)
         throw new LocalScreenGatewayError(parsed.errorCode)
       return await params.manager.stop(parsed.value)
     }),
-    defineInvokeHandler(params.context, electronLocalScreenStatus, (input) => {
+    defineWindowScopedInvokeHandler(params.context, electronLocalScreenStatus, params.callerWebContentsId, (input) => {
       const parsed = parseLocalScreenGatewayStatusRequest(input)
       if (!parsed.ok)
         throw new LocalScreenGatewayError(parsed.errorCode)

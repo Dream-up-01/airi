@@ -29,7 +29,8 @@ import { emitAppBeforeQuit, emitAppReady, emitAppWindowAllClosed } from './libs/
 import { setElectronMainDirname } from './libs/electron/location'
 import { createI18n } from './libs/i18n'
 import { createWindowAuthManagerService } from './services/airi/auth'
-import { setupServerChannel } from './services/airi/channel-server'
+import { attachMinecraftPairingNotifier, setupServerChannel } from './services/airi/channel-server'
+import { createElectronMinecraftPairingNotifier } from './services/airi/channel-server/minecraftPairingNotifier.electron'
 import { setupGodotStageManager } from './services/airi/godot-stage'
 import { setupBuiltInServer } from './services/airi/http-server'
 import { setupLocalVoiceServiceManager } from './services/airi/local-voice-services'
@@ -179,9 +180,9 @@ app.whenReady().then(async () => {
     build: async () => setupMcpStdioManager(),
   })
 
-  const localVoiceServiceManager = injeca.provide('modules:local-voice-service-manager', () => setupLocalVoiceServiceManager())
+  const localVoiceServiceManager = injeca.provide('modules:local-voice-service-manager', () => setupLocalVoiceServiceManager({ appPath: app.getAppPath() }))
   const localScreenConsentRegistry = injeca.provide('modules:local-screen-consent-registry', () => setupLocalScreenConsentRegistry())
-  const localTransformersScreenManager = injeca.provide('modules:local-transformers-screen-manager', () => setupLocalTransformersScreenManager())
+  const localTransformersScreenManager = injeca.provide('modules:local-transformers-screen-manager', () => setupLocalTransformersScreenManager({ appPath: app.getAppPath() }))
   const qwenCloudCostLedger = injeca.provide('modules:qwen-cloud-cost-ledger', () => new QwenCloudCostLedgerStore())
   const qwenCloudControlManager = injeca.provide('modules:qwen-cloud-control-manager', {
     dependsOn: { qwenCloudCostLedger },
@@ -246,7 +247,7 @@ app.whenReady().then(async () => {
   })
 
   const settingsWindow = injeca.provide('windows:settings', {
-    dependsOn: { widgetsManager, beatSync, autoUpdater, devtoolsWindow: devtoolsMarkdownStressWindow, serverChannel, godotStageManager, localVoiceServiceManager, mcpStdioManager, i18n, windowAuthManager, globalShortcut, spotlightWindow, qwenCloudControlManager, qwenCloudGrantRegistry, qwenCloudMediaGatewayManager },
+    dependsOn: { widgetsManager, beatSync, autoUpdater, devtoolsWindow: devtoolsMarkdownStressWindow, serverChannel, godotStageManager, localVoiceServiceManager, mcpStdioManager, i18n, windowAuthManager, globalShortcut, spotlightWindow, localScreenConsentRegistry, localTransformersScreenManager, qwenCloudControlManager, qwenCloudGrantRegistry, qwenCloudMediaGatewayManager },
     build: async ({ dependsOn }) => setupSettingsWindowReusableFunc(dependsOn),
   })
 
@@ -285,6 +286,21 @@ app.whenReady().then(async () => {
       callback: noop,
     })
   }
+
+  // Minecraft pairing approvals must stay reachable when no perception panel is
+  // open, so the OS-notification port is attached after the settings window
+  // manager exists. Attaching from an `invoke` consumer instead of declaring the
+  // notifier as a dependency of 'modules:channel-server' keeps the graph acyclic:
+  // 'windows:settings' already depends on 'modules:channel-server'.
+  injeca.invoke({
+    dependsOn: { serverChannel, settingsWindow, i18n },
+    callback: (deps) => {
+      attachMinecraftPairingNotifier(createElectronMinecraftPairingNotifier({
+        i18n: deps.i18n,
+        settingsWindow: deps.settingsWindow,
+      }))
+    },
+  })
 
   injeca.invoke({
     dependsOn: { mainWindow, tray, serverChannel, airiHttpServer, godotStageManager, pluginHost, mcpStdioManager, onboardingWindow: onboardingWindowManager, widgetsWindow: widgetsManager, spotlightWindow, artistryConfig },

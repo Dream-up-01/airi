@@ -4,6 +4,8 @@ import type { ServerChannel } from '../../services/airi/channel-server'
 import type { GodotStageManager } from '../../services/airi/godot-stage'
 import type { LocalVoiceServiceManager } from '../../services/airi/local-voice-services'
 import type { McpStdioManager } from '../../services/airi/mcp-servers'
+import type { LocalScreenConsentRegistry } from '../../services/airi/perception/local-screen-consent-registry'
+import type { LocalTransformersScreenManager } from '../../services/airi/perception/local-transformers-screen'
 import type { QwenCloudControlManager } from '../../services/airi/perception/qwen-cloud-control-manager'
 import type { QwenCloudGrantRegistry } from '../../services/airi/perception/qwen-cloud-grant-registry'
 import type { QwenCloudMediaGatewayManager } from '../../services/airi/perception/qwen-cloud-media-gateway-manager'
@@ -44,6 +46,8 @@ export function setupSettingsWindowReusableFunc(params: {
   windowAuthManager: WindowAuthManager
   globalShortcut: GlobalShortcutService
   spotlightWindow: SpotlightWindowManager
+  localScreenConsentRegistry: LocalScreenConsentRegistry
+  localTransformersScreenManager: LocalTransformersScreenManager
   qwenCloudControlManager: QwenCloudControlManager
   qwenCloudGrantRegistry: QwenCloudGrantRegistry
   qwenCloudMediaGatewayManager: QwenCloudMediaGatewayManager
@@ -89,6 +93,8 @@ export function setupSettingsWindowReusableFunc(params: {
       windowAuthManager: params.windowAuthManager,
       globalShortcut: params.globalShortcut,
       spotlightWindow: params.spotlightWindow,
+      localScreenConsentRegistry: params.localScreenConsentRegistry,
+      localTransformersScreenManager: params.localTransformersScreenManager,
       qwenCloudControlManager: params.qwenCloudControlManager,
       qwenCloudGrantRegistry: params.qwenCloudGrantRegistry,
       qwenCloudMediaGatewayManager: params.qwenCloudMediaGatewayManager,

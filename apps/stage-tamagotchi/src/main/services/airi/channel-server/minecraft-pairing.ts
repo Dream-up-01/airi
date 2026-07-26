@@ -11,9 +11,42 @@ import type {
 
 import { createHash } from 'node:crypto'
 
+import { useLogg } from '@guiiai/logg'
 import { array, number, object, string } from 'valibot'
 
 import { createConfig } from '../../../libs/electron/persistence'
+
+/**
+ * Non-sensitive projection of a pending pairing request, handed to approval
+ * surfaces that live outside any renderer window.
+ *
+ * The device public key is deliberately absent: out-of-band surfaces only need
+ * to identify the request and let the user compare the verification code.
+ */
+export interface MinecraftPairingNotice {
+  /** Correlates the notice with `approve`, `reject` and `cancelApproval`. */
+  requestId: string
+  /** Mod-reported device label, shown to the user as-is. */
+  displayName: string
+  /** Short code the user compares against the code shown inside the game. */
+  verificationCode: string
+  /** Epoch milliseconds after which the request rejects itself. */
+  expiresAt: number
+}
+
+/**
+ * Out-of-band notification port for pairing approvals.
+ *
+ * Implementations run outside any renderer window so a pairing request stays
+ * actionable when the perception panel is closed. Every callback is treated as
+ * best-effort: throwing must never stall the pairing state machine.
+ */
+export interface MinecraftPairingNotifier {
+  /** Invoked once per newly registered pending request. */
+  onRequested: (notice: MinecraftPairingNotice) => void
+  /** Invoked once when a pending request is approved, rejected or expires. */
+  onResolved?: (requestId: string) => void
+}
 
 interface PersistedMinecraftPairingDevice extends MinecraftPairedDevice {
   publicKey: string
@@ -49,9 +82,32 @@ export class MinecraftPairingManager implements ModulePairingProvider {
 
   private readonly pending = new Map<string, PendingApproval>()
   private readonly revocationListeners = new Set<(deviceId: string) => void>()
+  private readonly log = useLogg('minecraft-pairing').useGlobalConfig()
+  private notifier?: MinecraftPairingNotifier
+
+  constructor(params: {
+    /** Out-of-band approval surface, when one is available at construction time. */
+    notifier?: MinecraftPairingNotifier
+  } = {}) {
+    this.notifier = params.notifier
+  }
 
   setup(): void {
     this.store.setup()
+  }
+
+  /**
+   * Attaches (or clears) the out-of-band approval surface after construction.
+   *
+   * Use when:
+   * - The notifier depends on collaborators that only exist later in the
+   *   application composition, such as the settings window manager
+   *
+   * Expects:
+   * - At most one notifier at a time; a later call replaces the previous port
+   */
+  setNotifier(notifier: MinecraftPairingNotifier | undefined): void {
+    this.notifier = notifier
   }
 
   isPaired(identity: ModulePairingIdentity): boolean {
@@ -67,19 +123,24 @@ export class MinecraftPairingManager implements ModulePairingProvider {
       const delay = Math.max(0, request.expiresAt - Date.now())
       const timer = setTimeout(() => this.resolvePending(request.requestId, false), delay)
       timer.unref?.()
+      const pendingRequest: MinecraftPairingRequest = {
+        requestId: request.requestId,
+        deviceId: request.deviceId,
+        displayName: request.displayName,
+        clientVersion: request.clientVersion,
+        verificationCode: request.verificationCode,
+        expiresAt: request.expiresAt,
+      }
       this.pending.set(request.requestId, {
-        request: {
-          requestId: request.requestId,
-          deviceId: request.deviceId,
-          displayName: request.displayName,
-          clientVersion: request.clientVersion,
-          verificationCode: request.verificationCode,
-          expiresAt: request.expiresAt,
-        },
+        request: pendingRequest,
         publicKey: request.publicKey,
         resolve,
         timer,
       })
+
+      // Announce only after the request is pending, so an approval triggered
+      // synchronously from the notification still finds it in `pending`.
+      this.notifyRequested(pendingRequest)
     })
   }
 
@@ -153,6 +214,44 @@ export class MinecraftPairingManager implements ModulePairingProvider {
     this.pending.delete(requestId)
     clearTimeout(entry.timer)
     entry.resolve(approved)
+    this.notifyResolved(requestId)
     return true
+  }
+
+  /**
+   * Hands a pending request to the out-of-band approval surface.
+   *
+   * The notifier is untrusted infrastructure (OS notification centre), so a
+   * failure is logged and swallowed instead of leaking into the pairing state
+   * machine, which the Fabric mod treats as terminal.
+   */
+  private notifyRequested(request: MinecraftPairingRequest): void {
+    if (!this.notifier)
+      return
+
+    try {
+      this.notifier.onRequested({
+        requestId: request.requestId,
+        displayName: request.displayName,
+        verificationCode: request.verificationCode,
+        expiresAt: request.expiresAt,
+      })
+    }
+    catch (error) {
+      this.log.withError(error).warn(`Failed to announce Minecraft pairing request ${request.requestId}`)
+    }
+  }
+
+  /** Lets the out-of-band surface withdraw a notice whose request is no longer actionable. */
+  private notifyResolved(requestId: string): void {
+    if (!this.notifier?.onResolved)
+      return
+
+    try {
+      this.notifier.onResolved(requestId)
+    }
+    catch (error) {
+      this.log.withError(error).warn(`Failed to withdraw the Minecraft pairing notice for ${requestId}`)
+    }
   }
 }

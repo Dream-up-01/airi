@@ -144,3 +144,13 @@ apps/stage-tamagotchi/electron.vite.config.*.mjs
 
 docs/ai/context/verifications/
 .playwright-mcp/
+
+# Local model weights and speech datasets (cn-companion local services)
+services/stt/SenseVoice-Small/
+services/tts/datasets/
+
+# Local tool artifacts and personal launchers
+midscene_run/
+/启动-AIRI.cmd
+/启动-AIRI.ps1
+/AIRI 一键启动.lnk

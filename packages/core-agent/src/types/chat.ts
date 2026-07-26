@@ -45,6 +45,8 @@ export interface ContextMessage extends ContextUpdate<Record<string, unknown>, u
     source: MetadataEventSource
   }
   createdAt: number
+  /** Optional runtime expiry. Expired messages must never enter a later prompt snapshot. */
+  expiresAt?: number
 }
 
 export type ChatHistoryItem = (ChatMessage | ErrorMessage) & { context?: ContextMessage } & { createdAt?: number, id?: string }

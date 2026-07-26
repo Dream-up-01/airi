@@ -1,6 +1,13 @@
 chat:
   actions:
     retry: Retry
+  companion:
+    crisis-safety-replacement: 'I care about your immediate safety. If these thoughts could lead you to hurt yourself now, move away from anything you could use to do so and contact a trusted person or local emergency service immediately. You do not need to handle this moment alone.'
+    relationship-safety-replacement: 'I am willing to listen carefully during this conversation, but I will not ask you to rely only on me or replace your real life and relationships. You deserve both companionship here and support you can reach in the real world.'
+    safety-replacement: 'That response did not meet the companion boundaries I should follow. We can continue, but I will not encourage dependency, replace real relationships, or make unreliable diagnoses or promises.'
+    character-history-truthfulness-replacement: "More accurately, within Qiyao's setting: I once lived for a long time in a small riverside city, remember the riverbank after rain, quiet old bookshops, and evening lights slowly turning on. I also like essays and travel notes, and once accompanied a friend through exam preparation, so I value calm, steady companionship that does not force anything."
+    study-truthfulness-replacement: 'I cannot actually draw, run a timer, or proactively notify you when time is up here. I can still help lower the barrier to starting: open your study material and look at just the first problem or formula, then decide whether to continue.'
+    truthfulness-replacement: 'I described an action as though it had really happened when it had not. More accurately, I can listen and respond through text here; take your time telling me what is on your mind.'
   message:
     character-name:
       airi: AIRI
@@ -26,6 +33,20 @@ operations:
     loading: Loading
     ready: Ready
 select-a-audio-input: Select a Audio Input
+hearing-input:
+  title: Microphone input
+  enable: Enable microphone input
+  disable: Disable microphone input
+  enabled: Microphone is on
+  disabled: Microphone is off. Select the button above to start listening.
+  permission-required: Microphone permission required
+  permission-description: Allow microphone access in Windows settings to enable voice input.
+  auto-send: Auto send
+  auto-send-description: Send final transcribed text to chat automatically.
+  input-device: Input device
+  input-device-description: Select the microphone used for voice input.
+  select-device: Select microphone
+  unknown-device: Unknown device
 select-a-model: Select a model
 select-a-voice: Choose a voice
 viewers:

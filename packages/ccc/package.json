@@ -10,6 +10,7 @@
     "lint:fix": "eslint --fix ."
   },
   "dependencies": {
-    "meta-png": "catalog:"
+    "meta-png": "catalog:",
+    "valibot": "catalog:"
   }
 }

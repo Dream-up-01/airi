@@ -37,6 +37,39 @@ function createContextMessage(overrides: Partial<TestContextMessage> = {}): Test
  * registry.ingest({ strategy: ContextUpdateStrategy.ReplaceSelf, text: 'now' })
  */
 describe('createContextRegistry', () => {
+  it('explicitly retracts a source bucket and its retained history', () => {
+    const registry = createContextRegistry()
+    registry.ingest(createContextMessage({ id: 'sensor-1', source: 'sensor' }))
+    registry.ingest(createContextMessage({ id: 'weather-1', source: 'weather' }))
+
+    expect(registry.retract('sensor')).toEqual({
+      sourceKey: 'sensor',
+      removedEntries: 1,
+      removedHistoryEntries: 1,
+    })
+    expect(registry.snapshot().sensor).toBeUndefined()
+    expect(registry.snapshot().weather).toHaveLength(1)
+    expect(registry.contextHistory().map(message => message.id)).toEqual(['weather-1'])
+  })
+
+  it('removes expired messages before returning active or history snapshots', () => {
+    let now = 1_000
+    const registry = createContextRegistry({ now: () => now })
+    registry.ingest(createContextMessage({ id: 'expiring', source: 'sensor', expiresAt: 2_000 }))
+
+    expect(registry.snapshot().sensor).toHaveLength(1)
+    now = 2_000
+    expect(registry.snapshot().sensor).toBeUndefined()
+    expect(registry.contextHistory()).toEqual([])
+  })
+
+  it('does not ingest a context message that is already expired', () => {
+    const registry = createContextRegistry({ now: () => 2_000 })
+    expect(registry.ingest(createContextMessage({ source: 'sensor', expiresAt: 2_000 }))).toBeUndefined()
+    expect(registry.snapshot()).toEqual({})
+    expect(registry.contextHistory()).toEqual([])
+  })
+
   /**
    * @example
    * replace-self from the same source leaves one active entry and reports replace.

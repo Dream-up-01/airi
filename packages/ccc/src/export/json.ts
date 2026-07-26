@@ -1,12 +1,15 @@
 import type { Card } from '../define'
 import type { CharacterCardV3 } from './types/character_card_v3'
 
+import { assertCardExportSafe } from './privacy'
+
 /**
  * Exports a Card object to CharacterCardV3 format
  * @param data The card data to export
  * @returns A CharacterCardV3 compatible object
  */
 export function exportToJSON(data: Card): CharacterCardV3 {
+  assertCardExportSafe(data)
   return {
     spec: 'chara_card_v3',
     spec_version: '3.0',
@@ -29,6 +32,7 @@ function createCardData(data: Card): CharacterCardV3['data'] {
     first_mes: data.greetings?.[0] ?? '',
     alternate_greetings: data.greetings?.slice(1) ?? [],
     group_only_greetings: data.greetingsGroupOnly ?? [],
+    character_book: data.characterBook,
     character_version: data.version,
     creator: data.creator ?? '',
     creator_notes: data.notes ?? '',
@@ -60,7 +64,7 @@ function formatMessageExample(messageExample: string[][] | undefined): string {
  * @param data Source card data
  * @returns Extensions object
  */
-function createExtensions(data: Card): Record<string, any> {
+function createExtensions(data: Card): Record<string, unknown> {
   return {
     depth_prompt: {
       depth: 4,

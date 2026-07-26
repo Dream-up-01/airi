@@ -14,7 +14,7 @@ import type { MocapBackend, MocapConfig, MocapJob, PerceptionPartial, VisionTask
 
 import { Semaphore } from 'es-toolkit'
 
-import { visionTaskAssets, visionTaskWasmRoot } from '../../tasks/tasks'
+import { visionTaskAssets, visionTaskWasmFileset } from '../../tasks/tasks'
 
 export function createMediaPipeBackend(): MocapBackend {
   const semaphore = new Semaphore(1)
@@ -33,10 +33,7 @@ export function createMediaPipeBackend(): MocapBackend {
     if (!tasksVision)
       tasksVision = await import('@mediapipe/tasks-vision')
 
-    if (!vision) {
-      const { FilesetResolver } = tasksVision
-      vision = await FilesetResolver.forVisionTasks(visionTaskWasmRoot)
-    }
+    vision ??= visionTaskWasmFileset
   }
 
   function isBusy() {
@@ -49,7 +46,7 @@ export function createMediaPipeBackend(): MocapBackend {
 
     const { PoseLandmarker } = tasksVision!
     poseLandmarker = await PoseLandmarker.createFromOptions(vision!, {
-      baseOptions: { modelAssetPath: visionTaskAssets.pose },
+      baseOptions: { modelAssetPath: visionTaskAssets.pose, delegate: 'GPU' },
       runningMode: 'VIDEO',
       numPoses: 1,
     })
@@ -63,7 +60,7 @@ export function createMediaPipeBackend(): MocapBackend {
 
     const { HandLandmarker } = tasksVision!
     handLandmarker = await HandLandmarker.createFromOptions(vision!, {
-      baseOptions: { modelAssetPath: visionTaskAssets.hands },
+      baseOptions: { modelAssetPath: visionTaskAssets.hands, delegate: 'GPU' },
       runningMode: 'VIDEO',
       numHands: 2,
     })
@@ -77,7 +74,7 @@ export function createMediaPipeBackend(): MocapBackend {
 
     const { FaceLandmarker } = tasksVision!
     faceLandmarker = await FaceLandmarker.createFromOptions(vision!, {
-      baseOptions: { modelAssetPath: visionTaskAssets.face },
+      baseOptions: { modelAssetPath: visionTaskAssets.face, delegate: 'GPU' },
       runningMode: 'VIDEO',
       numFaces: 1,
     })
@@ -150,9 +147,30 @@ export function createMediaPipeBackend(): MocapBackend {
     }
   }
 
+  async function dispose() {
+    await semaphore.acquire()
+    busy = true
+    try {
+      poseLandmarker?.close()
+      handLandmarker?.close()
+      faceLandmarker?.close()
+      poseLandmarker = undefined
+      handLandmarker = undefined
+      faceLandmarker = undefined
+      vision = undefined
+      tasksVision = undefined
+      config = undefined
+    }
+    finally {
+      busy = false
+      semaphore.release()
+    }
+  }
+
   return {
     init,
     isBusy,
     run,
+    dispose,
   }
 }

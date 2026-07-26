@@ -312,6 +312,94 @@ pages:
         error:
           fallback: Could not start deletion. Try again later.
   card:
+    companion_import:
+      activate: Activate preset
+      activated: Companion preset activated
+      binding_warning: Some model bindings are unavailable; current selections will be retained
+      binding_warnings:
+        display_model_unavailable: Display model “{requested}” is unavailable.
+        model_unavailable: Model “{requested}” is not in the currently loaded model inventory.
+        provider_unavailable: Provider “{requested}” is not configured or available.
+      confirm_replace: Confirm replacement of this preset ID
+      current_models: Keep current model selections
+      description: Import a validated YAML or JSON companion preset. Previewing does not change the active character.
+      import_errors:
+        file_changed_too_large: The file changed while being read and now exceeds 256 KiB.
+        file_too_large: Preset files must not exceed 256 KiB.
+        invalid_format: The file is not valid YAML or JSON, or contains duplicate fields or excessive aliases.
+        invalid_utf8: Preset files must use valid UTF-8 encoding.
+        read_failed: The selected file could not be read. Check its permissions and try again.
+        stat_failed: The selected file could not be inspected. Confirm that it still exists.
+        unknown: Import failed. Check the file and try again.
+        unsupported_extension: Only .yaml, .yml, and .json files are supported.
+      models: Model bindings
+      personality: Personality
+      prompt_preview: Development prompt preview and sources
+      prompt_sections: Prompt sections
+      read_error: Could not read preset
+      replace_confirmed: Replacement confirmed; the preset can now be activated.
+      replace_warning: Existing preset ID will be replaced
+      replace_warning_description: Activating replaces the existing card with this ID. Use “Restore previous character” to undo this activation if needed.
+      restore: Disable companion preset and restore previous character
+      select: Select companion preset
+      title: Chinese companion preset
+      unknown_error: Unknown preset import error
+      validation_error: Preset validation failed
+      validation_errors:
+        forbidden_prompt_override: “{path}” attempts to override safety rules or claim an unavailable perception capability.
+        invalid_value: “{path}” has an invalid value or format.
+        missing_required_field: Required field “{path}” is missing.
+        sensitive_value: “{path}” contains a credential or machine-local path and cannot be imported as a distributable preset.
+        unknown_field: “{path}” is not supported by CompanionPreset v1.
+        unsupported_schema_version: Only CompanionPreset schema_version 1 is currently supported.
+      validation_suggestions:
+        correct_field_value: Correct the field type, enum, or format using the sample preset.
+        provide_required_value: Add the required field and import the preset again.
+        remove_sensitive_value: Remove API keys, access tokens, or machine-local absolute paths and import again.
+        remove_unknown_field: Remove this field; unknown configuration is never ignored silently.
+        remove_unsafe_prompt_instruction: Remove instructions that override safety, fabricate tool permissions, or claim unavailable perception.
+        use_schema_version_1: Explicitly migrate the preset to schema_version 1; automatic downgrade is not supported.
+      validation_success: Preset structure and safety boundaries are valid
+    worldbook:
+      title: World book
+      description: Add bounded, triggerable character and world facts used by the active chat prompt.
+      add_entry: Add entry
+      remove_entry: Remove
+      empty: No world-book entries yet.
+      name: Book name
+      book_description: Book description
+      scan_depth: Recent messages to scan
+      token_budget: Model token budget
+      tokenizer_idle: Select a Provider and model to check exact token-budget support; hard limits still apply.
+      tokenizer_loading: Loading the selected model's tokenizer; hard limits apply until it is ready.
+      tokenizer_ready: Exact token counting is available for the selected model and this budget will be enforced.
+      tokenizer_unsupported: The selected model has no verified tokenizer mapping; this budget cannot be enforced exactly and hard limits still apply.
+      tokenizer_failed: The verified tokenizer could not be loaded; this budget is not enforced and hard limits still apply.
+      recursive_scanning: Allow bounded recursive matching
+      entry_number: Entry {number}
+      entry_name: Entry name
+      comment: Editor comment
+      keys: Primary trigger keys
+      keys_hint: Enter one specific name, alias, or stable trigger per line. Broad one-character terms are ignored at runtime.
+      secondary_keys: Secondary trigger keys
+      content: Prompt content
+      position: Prompt position
+      before_character: Before character definition
+      after_character: After character definition
+      priority: Priority
+      insertion_order: Insertion order
+      enabled: Enabled
+      constant: Always active
+      use_regex: Regular-expression keys
+      selective: Require a secondary key
+      case_sensitive: Case sensitive
+      validation_error: Correct the invalid world-book field at {path} before saving.
+      warnings:
+        invalid_book: Correct the invalid world-book fields before saving.
+        empty_key: Remove empty trigger keys.
+        overly_broad_key: Replace broad or one-character keys with specific names or stable terms.
+        unsafe_regex: This regular expression uses unsupported unbounded or advanced syntax; use literals or finite quantifiers.
+        invalid_regex: Correct the invalid regular-expression trigger.
     activate: Activate
     active: Active
     active_badge: Currently Active
@@ -393,6 +481,110 @@ pages:
     modules: Modules
     name_asc: Name (A-Z)
     name_desc: Name (Z-A)
+    character_source_import:
+      entry_title: Build a card from character notes
+      entry_description: Analyze a UTF-8 text file, review evidence and conflicts, then create an inactive card.
+      open: Import character notes
+      title: Import character from text
+      file_label: Source file
+      supported_formats: Supports .docx, .txt, .md, .json, .yaml, and .yml
+      pick_file: Choose file…
+      pick_failed: Could not open file picker
+      no_electron: File selection requires the desktop app
+      provider_label: Analysis provider / model
+      model_label: Analysis model
+      no_provider: No provider configured
+      cloud_confirm: I understand this file will be sent to the selected provider for analysis
+      redaction_notice: '{count} high-confidence credential or local-path value(s) will be replaced before upload. The source document remains in memory only for this import.'
+      start: Start analysis
+      analyzing: Analysing character…
+      retry_count: Retries
+      back: Back
+      create_card: Create card
+      not_activated_notice: The new card will not be activated automatically. You can activate it from the card list.
+      proceed_to_confirm: Review & create
+      confirm_inferred: Confirm
+      inferred_lore_title: Inferred world-book facts require confirmation
+      name_required: Enter a character name before creating the card.
+      unresolved_conflicts: Please resolve all conflicts before proceeding.
+      conflicts_title: Resolve conflicts
+      conflicts_hint: The following facts are mutually exclusive. Choose how to handle each one.
+      conflict_category: 'Conflict: {category}'
+      keep_first: Keep first
+      keep_both: Keep both
+      discard_all: Discard both
+      review_title: Review character draft
+      story: Background story
+      relationships: Relationships
+      greetings: Greetings
+      message_examples: Source message examples
+      summary_title: Confirm new card
+      items: items
+      lore_entries: World book entries
+      unconfirmed_inferred: Unconfirmed inferred values
+      warnings: Warnings
+      blocking_issues: Blocking issues
+      unclassified_blocks: Unclassified source blocks
+      review_unclassified: Review unclassified source excerpts
+      world_book: World book
+      select_candidate: Multiple characters found
+      select_candidate_hint: Select the primary character to extract.
+      evidence_blocks: '{count} evidence blocks'
+      evidence: Source evidence
+      support:
+        explicit: Explicit
+        inferred: Inferred
+        ambiguous: Ambiguous
+      evidence_status:
+        unverified: Unverified
+        verified: Verified
+        rejected: Rejected
+      style:
+        tone: Tone
+        address_terms: Forms of address
+        pronouns: Pronouns
+        sentence_patterns: Sentence patterns
+        vocabulary: Vocabulary
+        catchphrases: Catchphrases
+        emotional_expression: Emotional expression
+        prohibited_expressions: Prohibited expressions
+      error: Analysis failed
+      error_file_too_large: Text files must not exceed 1 MB and Word documents must not exceed 10 MB
+      error_invalid_docx: Word document is invalid, damaged, or contains no readable body text
+      error_file_changed_during_read: File changed while being read
+      error_unsupported_extension: Unsupported file type
+      error_invalid_utf8: File is not valid UTF-8
+      error_read_failed: Could not read file
+      error_stat_failed: Could not inspect file
+      error_invalid_request: Invalid request ID
+      errors:
+        unknown: An unexpected error interrupted the import.
+        aborted: Analysis was cancelled.
+        cloud_confirmation_required: Confirm the provider upload before starting analysis.
+        provider_initialization_failed: The selected provider or model could not be initialized.
+        provider_incompatible: The selected provider cannot return the required structured result.
+        candidate_extraction_failed: Character discovery failed. Check the connection or try another analysis model.
+        fact_extraction_failed: Character fact extraction failed. Check the connection or try another analysis model.
+        validation_failed: The analysis did not pass local evidence validation. Retry or use another analysis model.
+        structured_output_missing: The provider did not return the required structured result.
+        invalid_candidate_output: Candidate discovery returned invalid or unsupported evidence.
+        invalid_fact_output: Fact extraction returned invalid or unsupported evidence.
+        no_candidates_found: No supported character candidate was found in this file.
+        invalid_candidate_selection: The selected character is no longer available. Start the import again.
+        draft_validation_failed: The reviewed draft is invalid. Return to review and correct its fields.
+        card_creation_failed: The reviewed draft could not be converted into a safe character card.
+      state:
+        idle: Idle
+        reading: Reading file
+        segmenting: Segmenting text
+        discovering_candidates: Discovering characters
+        awaiting_selection: Select character
+        extracting: Extracting facts
+        merging: Merging results
+        reviewing: Reviewing
+        completed: Completed
+        failed: Failed
+        cancelled: Cancelled
     no_cards: No cards yet. Click the button above to upload one!
     no_results: No matching cards found
     personality: Personality
@@ -410,7 +602,25 @@ pages:
     title: AIRI Card
     try_different_search: Try a different search term
     upload: Upload
-    upload_desc: Click or drag file to upload
+    upload_desc: Click or drag a CCv3 JSON or PNG file to upload
+    import_errors:
+      title: Character card import failed
+      read_failed: The selected file could not be read safely.
+      try_again: Check the file and try again.
+      codes:
+        invalid_json: The file is not valid JSON.
+        invalid_json_value: The card contains a value that JSON cannot safely represent.
+        invalid_schema: The field does not match the Character Card V3 contract.
+        missing_png_metadata: The PNG does not contain Character Card V3 metadata.
+        resource_limit: The card exceeds a safe size or nesting limit.
+        unsafe_key: The card contains an unsafe object property.
+      suggestions:
+        invalid_json: Fix the JSON syntax and import the file again.
+        invalid_json_value: Use only finite JSON numbers and standard JSON values.
+        invalid_schema: Correct the named field using the Character Card V3 format.
+        missing_png_metadata: Choose a CCv3 character-card PNG or import its JSON export.
+        resource_limit: Remove oversized, duplicate, or deeply nested card data.
+        unsafe_key: Remove prototype-related property names from the card.
   memory:
     description: Where memories got stored, and organized
     title: Memory
@@ -643,6 +853,13 @@ pages:
         Include Minecraft self-knowledge in Stage chat turns and keep passive
         runtime visibility enabled.
       configured: Minecraft is properly configured!
+      perception:
+        title: Trusted game perception
+        description: Only authenticated, schema-valid Minecraft status events are accepted. Free text, commands, duplicate events and stale events never enter chat context.
+        enable: Allow for this session
+        disable: Stop and revoke
+        counts: 'Accepted: {accepted} · Rejected: {rejected} · Suppressed: {suppressed}'
+        last-rejection: 'Latest safe rejection code: {code}'
       read-only:
         title: Read-only shell
         description: >-
@@ -660,19 +877,92 @@ pages:
         latest-context: Latest bot context
         waiting: Waiting for a fresh bot-originated context push.
         unknown: Unknown
+        safe-only: Runtime details contain controlled fact codes only; raw game text and payloads are not retained.
       debug:
         title: Minecraft traffic
         empty: No Minecraft traffic observed yet.
         source: 'Source: {source}'
+        outcome: 'Outcome: {outcome}'
       status:
         service-online: Service online
         service-offline: Service offline
         no-runtime-context: No bot context observed yet
         last-context-seconds: 'Last bot context: {seconds}s ago'
         last-context-stale: 'Last bot context: Stale'
+    perception:
+      title: Trusted perception
+      description: Manage explicit screen and camera consent, local processing, current analyzers, fresh facts, pause, and stop controls.
     hearing:
       description: Configure how speech recognition works
       title: Hearing
+      voice-conversation:
+        preferences:
+          title: Voice conversation
+          description: Safe runtime preferences for microphone turn-taking. Unsupported modes remain unavailable.
+          mode: Conversation mode
+          interruption-policy: Interruption policy
+          vad-threshold: VAD threshold
+          min-speech: Minimum speech duration
+          trailing-silence: Trailing silence
+          cloud-privacy: I understand when configured voice text is sent to a cloud TTS provider
+          cloud-privacy-description: Microphone audio remains on the configured ASR path. Cloud TTS receives checked assistant text only.
+        modes:
+          vad: VAD turn-taking
+          streaming: Streaming ASR
+          push-to-talk-unavailable: Push to talk (not available in this build)
+        interruptions:
+          disabled: Disabled
+          push: Push to interrupt
+          vad-unavailable: Automatic VAD barge-in (unavailable without echo protection)
+        local-asr:
+          title: Local ASR model switch
+          description: Qwen remains visible while stopped. Its local service starts only after you click, and the model changes only after a successful health check.
+          current: 'Current: {provider} / {model}'
+          current-other: The current ASR is outside the declared M2 local model matrix.
+          qwen-label: Qwen3-ASR 0.6B (local streaming)
+          sensevoice-label: SenseVoice-Small (local fallback)
+          use-qwen: Start and switch to Qwen3-ASR
+          use-sensevoice: Switch to SenseVoice
+          in-use: 'In use: {provider}'
+          selected: Selected
+          selected-indicator: The green dot marks the selected provider; every switch starts it and checks health again first.
+          switching: Starting, checking, and switching the local ASR…
+          configure: Configure provider endpoints
+          errors:
+            desktop_required: A local ASR service can be started only from the AIRI desktop app.
+            launcher_missing: The selected local ASR launcher is missing from this installation.
+            launch_failed: The selected local ASR could not be started. Check the local model environment.
+            startup_timeout: The selected local ASR did not become ready before the startup timeout.
+            app_stopping: AIRI is closing, so the local ASR cannot be switched.
+            validation_failed: The local ASR failed its health check; the previous model remains active.
+            unexpected: The local ASR switch failed; the previous model remains active.
+          notices:
+            previous-service-not-managed: The previous service was not started by this AIRI session, so it was not force-closed; close its terminal manually if it is still running.
+            previous-service-stop-failed: The new model is active, but the previous local service could not be closed; close its terminal manually.
+        diagnostics:
+          title: Voice diagnostics
+          description: Runtime-only capability and latency summaries. Transcript and audio content are not shown.
+          asr: ASR provider / model
+          asr-streaming: ASR stream input
+          tts: TTS provider / model / voice
+          tts-streaming: TTS delivery profile
+          supported: Supported
+          not-supported: Not supported
+          rest-aggregated: REST/SSE aggregated audio (not true streaming)
+          streaming: True streaming audio
+          not-declared: Not declared by provider
+          last-error: Recent error code
+          asr-latency: Speech-to-first-partial
+          tts-latency: Request-to-first-audio
+          style-warnings: Voice style capability warnings (development)
+          none: No data
+          warnings:
+            voice-style.unsupported-style: The provider does not support style; delivery was degraded to neutral or warm.
+            voice-style.unsupported-prosody: The provider does not support prosody; rate, pitch, and volume hints were removed.
+            voice-style.clamped-rate: Speech rate was clamped to the provider's supported range.
+            voice-style.clamped-pitch: Pitch was clamped to the provider's supported range.
+            voice-style.clamped-volume: Volume was clamped to the provider's supported range.
+            voice-style.unsafe-preferred-style: The requested playful style was disabled by the active safety policy.
       sections:
         section:
           provider-selection:
@@ -708,6 +998,19 @@ pages:
       configured: Discord is properly configured!
     speech:
       description: Speech synthesis
+      local-service-switch:
+        switching: Starting and checking the local speech service…
+        errors:
+          desktop_required: Only AIRI Desktop can start a local speech service.
+          launcher_missing: The local speech launcher is missing from this installation.
+          launch_failed: The local speech service could not start; check the model environment.
+          startup_timeout: The local speech service did not become ready before the startup timeout.
+          app_stopping: AIRI is stopping, so the local speech service cannot be switched.
+          validation_failed: The local speech service failed its health check; the previous provider remains active.
+          unexpected: The speech provider switch failed; the previous provider remains active.
+        notices:
+          previous-service-not-managed: The previous service was not started by this AIRI session, so it was not force-closed; close its terminal manually if it is still running.
+          previous-service-stop-failed: The new provider is active, but the previous local service could not be closed; close its terminal manually.
       sections:
         section:
           playground:
@@ -1047,6 +1350,79 @@ pages:
       app-local-audio-transcription:
         title: App (Local)
         description: https://github.com/moeru-ai/xsai-transformers
+      qwen3-asr-local:
+        title: Qwen3-ASR (Local Streaming)
+        description: Qwen3-ASR 0.6B running in local WSL2, continuously accepting microphone chunks and returning incremental transcripts.
+        settings:
+          local_only_title: Local WSL2 streaming recognition
+          local_only_description: The service runs inside Ubuntu WSL2 and starts only after you use the validation button below. Model weights stay local and audio is sent only to 127.0.0.1.
+          configuration_title: Streaming recognition settings
+          configuration_description: Qwen3-ASR continuously accepts 16 kHz microphone audio. A session starts with voice mode and ends on stop, provider switch, or TTS playback.
+          model_label: Recognition model
+          model_description: The current backend loads Qwen3-ASR 0.6B with vLLM streaming inference.
+          model_qwen3_asr_06b: Qwen3-ASR 0.6B (WSL2 / vLLM)
+          language_label: Language hint
+          language_description: Chinese is forced by default for stable short Chinese utterances; choose automatic for multilingual conversations.
+          language_zh: Chinese
+          language_auto: Automatic detection
+          language_en: English
+          language_ja: Japanese
+          language_ko: Korean
+          endpoint_title: Streaming service address
+          endpoint_label: Qwen3-ASR address
+          endpoint_description: The default is http://127.0.0.1:8001/ and must remain a loopback endpoint.
+          ready_title: Qwen3-ASR streaming is ready
+          ready_description: AIRI can continuously send microphone audio and releases the recognition session when stopped.
+          unavailable_title: Qwen3-ASR streaming is not ready
+          validate_and_activate_button: Validate and use as streaming ASR
+          starting_button: Starting Qwen3-ASR…
+          activation_failed: Qwen3-ASR started but did not pass its streaming health check.
+          start_errors:
+            desktop_required: AIRI can start this local service only from the desktop app.
+            launcher_missing: The bundled Qwen3-ASR launcher is unavailable in this AIRI installation.
+            launch_failed: Qwen3-ASR could not be started. Check WSL2 and the local model environment.
+            startup_timeout: Qwen3-ASR did not become ready before the startup timeout.
+            app_stopping: AIRI is closing, so the local service was not started.
+          validation_invalid_endpoint: Enter a local endpoint such as http://127.0.0.1:8001/.
+          validation_not_ready: Qwen3-ASR is still loading or unhealthy. Wait for startup to complete and try again.
+          validation_not_streaming: This endpoint only provides batch transcription. Start AIRI's Qwen3-ASR streaming bridge.
+          validation_unreachable: Qwen3-ASR is not running. Use the validation button to start it.
+      sensevoice-local:
+        title: SenseVoice (Local)
+        description: Local FunASR SenseVoice-Small transcription. Audio stays on this computer.
+        settings:
+          local_only_title: Local speech recognition
+          local_only_description: Start services/stt/SenseVoice-Small/start-stt.bat and keep its terminal open. This service listens only on this computer and needs no API key.
+          configuration_title: Recognition settings
+          configuration_description: SenseVoice-Small uses the recording-complete path and is optimized for Chinese voice conversations.
+          model_label: Recognition model
+          model_description: The local service currently packages FunASR SenseVoice-Small.
+          model_sensevoice_small: SenseVoice-Small (FunASR, local)
+          language_label: Language hint
+          language_description: Prefer Chinese to reduce language-detection drift on short Chinese utterances; choose automatic when unsure.
+          language_zh: Chinese (Simplified preferred)
+          language_auto: Automatic detection
+          language_en: English
+          language_ja: Japanese
+          language_ko: Korean
+          endpoint_title: Local service address
+          endpoint_label: OpenAI-compatible address
+          endpoint_description: Keep a loopback 127.0.0.1 or localhost address; remote endpoints are not supported.
+          ready_title: SenseVoice is ready
+          ready_description: The local service loaded its model and can be used for AIRI voice conversations.
+          unavailable_title: SenseVoice is not ready
+          validate_and_activate_button: Start, validate, and use as Chinese ASR
+          starting_button: Starting SenseVoice…
+          activation_failed: SenseVoice started but did not pass its health check.
+          start_errors:
+            desktop_required: AIRI can start this local service only from the desktop app.
+            launcher_missing: The bundled SenseVoice launcher is unavailable in this AIRI installation.
+            launch_failed: SenseVoice could not be started. Check the local runtime and model files.
+            startup_timeout: SenseVoice did not become ready before the startup timeout.
+            app_stopping: AIRI is closing, so the local service was not started.
+          validation_invalid_endpoint: Enter a local SenseVoice endpoint, for example http://127.0.0.1:8765/v1/.
+          validation_not_ready: SenseVoice did not report a ready service. Use the validation button to start it, then try again.
+          validation_unreachable: Cannot reach SenseVoice. Use the validation button to start it.
       app-local-audio-speech:
         title: App (Local)
         description: https://github.com/moeru-ai/xsai-transformers
@@ -1311,6 +1687,102 @@ pages:
       minimax-speech:
         description: minimax.io
         title: MiniMax Speech
+        settings:
+          activation_failed: MiniMax speech is not configured or could not be validated.
+          activation_ready_description: MiniMax is now AIRI's active voice for typed chat and voice conversations.
+          activation_ready_title: MiniMax active voice is ready
+          activate_button: Validate and use as active voice
+          cloud_description: Voice-call reply text is sent to the configured MiniMax service for speech generation. Enable only when you consent to cloud processing.
+          cloud_title: Cloud speech and privacy
+          configuration_description: Choose speech-2.8-turbo or speech-2.8-hd. Requests use the selected model exactly. The API key stays in the provider configuration only.
+          configuration_title: MiniMax voice-call configuration
+          endpoint_description: Use https://api.minimax.io for an international API key and https://api.minimaxi.com for a mainland-China API key. Voice cloning uploads only to the selected official regional endpoint.
+          endpoint_label: MiniMax API endpoint
+          endpoint_title: API endpoint
+          model_label: Model
+          voice_description: Select a MiniMax voice for calls. AIRI will not silently fall back to another voice when this is empty.
+          voice_label: Call voice
+          voice_catalog_failed: AIRI could not load the voices available to this MiniMax account. Check the API key, account region, and network, then retry.
+          voice_required: Select a MiniMax call voice first.
+          voice_unavailable: This MiniMax account cannot use voice {id}. Select a voice synchronized from the account catalog.
+          clone:
+            api_key_required: Enter a MiniMax API key on the left first. The key is never shown in this form.
+            consent_description: When you create the voice, the two selected audio files are uploaded to MiniMax's voice-cloning API. AIRI does not save the audio, text, or local paths.
+            consent_label: I confirm I am authorized to use and clone these audio files, and consent to uploading the selected files to MiniMax
+            custom_voice_name: 'Custom voice: {id}'
+            description: A source recording and a short, exactly transcribed prompt recording are uploaded only after your explicit confirmation. The result stores only a safe voice ID.
+            errors:
+              api-key-required: No MiniMax API key was found.
+              api-key-invalid: The MiniMax API key is invalid, expired, or does not match the selected account region. Create an active API key in MiniMax and enter it again.
+              account-balance-insufficient: The MiniMax account does not have enough balance to create or use this voice.
+              clone-failed: MiniMax could not create the voice. Check that the voice ID is unused and that the files and text meet the requirements.
+              invalid-prompt-audio: The prompt audio must be a wav, mp3, or m4a shorter than 8 seconds and no larger than 20 MB.
+              invalid-prompt-text: The prompt text is required, must be at most 200 characters, and must match the prompt audio exactly.
+              invalid-preview-text: The preview text must be no longer than 1000 characters.
+              invalid-endpoint: The MiniMax API endpoint is not an official supported mainland-China or international address. Use api.minimaxi.com or api.minimax.io.
+              invalid-source-audio: The source audio must be a wav, mp3, or m4a from 10 seconds to 5 minutes and no larger than 20 MB.
+              invalid-voice-id: The voice ID must begin with a letter, be 8–256 characters, use only letters, digits, -, _, and not end in - or _.
+              network-failed: AIRI could not reach MiniMax. Check the network, account region, and API key, then retry.
+              upload-failed: MiniMax did not accept the uploaded audio. Check the file format, duration, size, and account permissions.
+              usage-limit-exceeded: The MiniMax account has reached its current usage limit. Try again later.
+              voice-cloning-unavailable: Voice cloning is not enabled for this MiniMax account. Complete the required MiniMax account verification or enable access first.
+              voice-id-duplicate: This voice ID already exists in the MiniMax account. Choose a new ID.
+            existing:
+              description: Add a custom voice created successfully in the MiniMax console or on another AIRI device. AIRI stores only the safe voice ID, never the audio, path, or API key.
+              errors:
+                invalid-voice-id: The voice ID format is invalid. It must start with a letter, be 8–256 characters, use only letters, digits, -, _, and not end in - or _.
+                registration-failed: AIRI could not use this as the call voice. Check the MiniMax configuration and voice ID.
+              submit: Add and use for voice calls
+              title: Add an existing custom voice
+              voice_id_description: Enter only a MiniMax custom voice ID you are authorized to use.
+              voice_id_label: Existing voice ID
+            preview_description: Creating a preview consumes MiniMax text-to-speech quota, so it is off by default.
+            preview_label: Generate a paid preview while creating
+            preview_text_description: Up to 1000 characters; sent only when preview is enabled.
+            preview_text_label: Preview text
+            prompt_description: Shorter than {max} seconds, with clear voice and pronunciation. The exact matching text is required.
+            prompt_label: Short prompt audio
+            prompt_placeholder: Select prompt audio (for example, firefly_0001.wav)
+            prompt_text_description: Used only for MiniMax's prompt-audio consistency check; maximum 200 characters.
+            prompt_text_label: Prompt audio transcript
+            prompt_text_placeholder: Enter the exact prompt-audio transcript
+            privacy_note: The selected audio and prompt text are sent to MiniMax only after the button below is clicked. Uploads are subject to MiniMax account, regional, and content policies.
+            source_description: One wav, mp3, or m4a file from {min} seconds to {max} minutes, no larger than 20 MB.
+            source_label: Source audio to clone
+            source_placeholder: Select the locally prepared clone-source audio
+            submit: Confirm upload and create voice
+            title: Clone a custom call voice
+            voice_id_description: Stored as the character's safe voice ID after creation; it must not duplicate an ID already in the MiniMax account.
+            voice_id_label: New voice ID
+      gpt-sovits-local:
+        description: Loopback-only GPT-SoVITS Firefly speech bridge.
+        title: GPT-SoVITS (Local)
+        settings:
+          activation_failed: GPT-SoVITS did not pass its loopback health check; the service may be stopped, or its model and fixed voice may still be loading.
+          activation_ready_description: Local Firefly is now AIRI's active voice for typed chat and voice conversations.
+          activation_ready_title: Local voice is ready
+          activate_button: Start, health-check, and use as active voice
+          starting_button: Starting GPT-SoVITS…
+          configuration_description: The local bridge owns the model and reference binding. Character cards never store paths or reference text.
+          configuration_title: Local Firefly configuration
+          endpoint_description: Only localhost or 127.0.0.1 is accepted so speech text is not sent to a remote endpoint.
+          endpoint_label: Local bridge endpoint
+          endpoint_title: Local service endpoint
+          local_only_description: The service starts only after you use the button below. The health check contacts only 127.0.0.1 to confirm the bridge, model, and fixed voice are ready; it does not send conversation text. Speech text, reference audio, and model weights stay on this device.
+          local_only_title: Local privacy mode
+          model_label: Model
+          model_name: Firefly v4 (Local)
+          start_errors:
+            desktop_required: AIRI can start this local service only from the desktop app.
+            launcher_missing: The bundled GPT-SoVITS launcher is unavailable in this AIRI installation.
+            launch_failed: GPT-SoVITS could not be started. Check the local runtime and model files.
+            startup_timeout: GPT-SoVITS did not become ready before the startup timeout.
+            app_stopping: AIRI is closing, so the local service was not started.
+          validation_invalid_endpoint: Local GPT-SoVITS can only use a localhost or 127.0.0.1 endpoint.
+          validation_not_ready: Local GPT-SoVITS is unavailable or still loading its model.
+          validation_unreachable: Local GPT-SoVITS is not running. Use the validation button to start it.
+          voice_label: Voice
+          voice_name: AIRI Firefly
       mimo:
         description: api.xiaomimimo.com
         title: Xiaomi MiMo

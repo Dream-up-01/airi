@@ -9,6 +9,7 @@ import type {
   ExtensionModuleIdentity,
   ModuleConfigSchema,
   ModuleDependency,
+  ModulePermissionDeclaration,
   WebSocketBaseEvent,
   WebSocketEvent,
   WebSocketEventOptionalSource,
@@ -69,6 +70,7 @@ export interface ClientOptions<C = undefined> {
   extension?: ExtensionIdentity
   identity?: ExtensionModuleIdentity
   dependencies?: ModuleDependency[]
+  permissions?: ModulePermissionDeclaration
   configSchema?: ModuleConfigSchema
   heartbeat?: false | ClientHeartbeatOptions
 
@@ -96,6 +98,7 @@ interface NormalizedClientOptions<C> {
   extension: ExtensionIdentity
   identity: ExtensionModuleIdentity
   dependencies: ModuleDependency[]
+  permissions?: ModulePermissionDeclaration
   configSchema?: ModuleConfigSchema
   heartbeat: false | Required<ClientHeartbeatOptions>
   autoConnect: boolean
@@ -189,6 +192,7 @@ function normalizeOptions<C>(options: ClientOptions<C>): NormalizedClientOptions
     extension,
     identity,
     dependencies: options.dependencies ?? [],
+    permissions: options.permissions,
     configSchema: options.configSchema,
     heartbeat: normalizeHeartbeatOptions(options.heartbeat),
     autoConnect: options.autoConnect ?? true,
@@ -442,6 +446,7 @@ export class Client<C = undefined> {
         name: this.opts.name,
         identity: this.opts.identity,
         possibleEvents: this.opts.possibleEvents,
+        permissions: this.opts.permissions,
         configSchema: this.opts.configSchema,
         dependencies: this.opts.dependencies,
       },

@@ -45,6 +45,8 @@ export enum WebSocketReadyState {
 
 export interface AuthenticatedPeer extends NamedPeer {
   authenticated: boolean
+  /** Paired device identity for Ed25519-authenticated module sessions. */
+  pairingDeviceId?: string
   /** Caller-supplied peer ids acknowledged during manual peer authentication. */
   peerIds?: Set<string>
   identity?: ExtensionModuleIdentity

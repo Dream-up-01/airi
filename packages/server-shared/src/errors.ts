@@ -1,6 +1,12 @@
 export const ServerErrorMessages = {
   invalidEventFormat: 'invalid event format',
   invalidToken: 'invalid token',
+  pairingUnavailable: 'pairing-unavailable',
+  pairingInvalidRequest: 'pairing-invalid-request',
+  pairingProofInvalid: 'pairing-proof-invalid',
+  pairingDenied: 'pairing-denied',
+  pairingServiceFailed: 'pairing-service-failed',
+  pairingTimeout: 'pairing-timeout',
   mustAuthenticateBeforeAnnouncing: 'must authenticate before announcing',
   moduleAnnounceIdentityInvalid: 'extension module identity must include an extension id for event \'extension:module:announce\'',
   moduleAnnounceIndexInvalid: 'the field \'index\' must be a non-negative integer for event \'extension:module:announce\'',
@@ -17,6 +23,12 @@ export type ServerErrorCode
   = | 'invalid-event-format'
     | 'invalid-json'
     | 'invalid-token'
+    | 'pairing-unavailable'
+    | 'pairing-invalid-request'
+    | 'pairing-proof-invalid'
+    | 'pairing-denied'
+    | 'pairing-service-failed'
+    | 'pairing-timeout'
     | 'module-announce-identity-invalid'
     | 'module-announce-index-invalid'
     | 'module-announce-name-invalid'
@@ -52,6 +64,42 @@ const errorMetadataRegistry: Record<string, Omit<ParsedServerErrorMessage, 'mess
     code: 'invalid-token',
     recoverable: false,
     terminal: true,
+  },
+  [ServerErrorMessages.pairingUnavailable]: {
+    authentication: true,
+    code: 'pairing-unavailable',
+    recoverable: false,
+    terminal: true,
+  },
+  [ServerErrorMessages.pairingInvalidRequest]: {
+    authentication: true,
+    code: 'pairing-invalid-request',
+    recoverable: false,
+    terminal: true,
+  },
+  [ServerErrorMessages.pairingProofInvalid]: {
+    authentication: true,
+    code: 'pairing-proof-invalid',
+    recoverable: false,
+    terminal: true,
+  },
+  [ServerErrorMessages.pairingDenied]: {
+    authentication: true,
+    code: 'pairing-denied',
+    recoverable: false,
+    terminal: true,
+  },
+  [ServerErrorMessages.pairingServiceFailed]: {
+    authentication: true,
+    code: 'pairing-service-failed',
+    recoverable: true,
+    terminal: false,
+  },
+  [ServerErrorMessages.pairingTimeout]: {
+    authentication: true,
+    code: 'pairing-timeout',
+    recoverable: true,
+    terminal: false,
   },
   [ServerErrorMessages.notAuthenticated]: {
     authentication: true,

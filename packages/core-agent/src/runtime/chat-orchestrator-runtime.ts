@@ -156,6 +156,46 @@ export interface ChatOrchestratorRuntimeState {
   pendingQueuedSendCount: number
 }
 
+/** Final assistant-output policy decision applied before persistence and sync. */
+export type AssistantOutputPolicyDecision
+  = | {
+    /** Allows the generated assistant-visible text to be persisted unchanged. */
+    accepted: true
+  }
+  | {
+    /** Rejects the generated assistant-visible text. */
+    accepted: false
+    /** Localized safe replacement; an empty value removes the rejected turn. */
+    replacementText: string
+    /** Low-cardinality policy identifiers suitable for diagnostics. */
+    ruleIds?: string[]
+  }
+
+/** Controls whether generated output is released incrementally or only after policy validation. */
+export type AssistantOutputReleaseMode = 'stream' | 'after-validation'
+
+/**
+ * Position-aware system prompt additions for one provider request.
+ *
+ * `before` and `after` are deliberately generic runtime positions. Domain
+ * adapters such as CCv3 lorebooks decide whether those positions correspond
+ * to before/after character definitions.
+ */
+export interface SystemPromptSupplement {
+  /**
+   * Fully composed system prompt replacing the stored session prompt.
+   * Cannot be combined with `before` or `after` by the runtime.
+   */
+  replace?: string
+  /** Prompt content inserted before the existing session system message. */
+  before?: string
+  /** Prompt content inserted after the existing session system message. */
+  after?: string
+}
+
+/** Backwards-compatible string supplements are appended after the system prompt. */
+export type SystemPromptSupplementInput = string | SystemPromptSupplement
+
 /**
  * Dependency surface used by the platform-agnostic chat orchestrator runtime.
  */
@@ -172,8 +212,23 @@ export interface ChatOrchestratorRuntimeDeps {
   getActiveSessionId: () => string
   /** Returns the currently active provider ID for categorization policy. */
   getActiveProvider: () => string | undefined
-  /** Returns optional prompt text appended to the provider system message for this send. */
-  getSystemPromptSupplement?: () => string | undefined
+  /** Returns optional, position-aware prompt text for this send. */
+  getSystemPromptSupplement?: (event: {
+    /** Current user-authored text. */
+    messageText: string
+    /** Existing chronological session history, including the current user turn. */
+    sessionMessages: readonly ChatHistoryItem[]
+    /** Session associated with the request. */
+    sessionId: string
+  }) => SystemPromptSupplementInput | undefined
+  /** Validates finalized assistant-visible text before it is persisted or externally synced. */
+  validateAssistantOutput?: (event: { messageText: string, sessionId: string }) => AssistantOutputPolicyDecision
+  /** Selects per-turn output release semantics before provider streaming starts. */
+  getAssistantOutputReleaseMode?: (event: { messageText: string, sessionId: string }) => AssistantOutputReleaseMode
+  /** Allows only presentation-safe special tokens to be released after buffered validation. */
+  allowBufferedSpecialOutput?: (event: { special: string, sessionId: string }) => boolean
+  /** Called without raw response content when output policy replaces a response. */
+  onAssistantOutputRejected?: (event: { ruleIds: string[], sessionId: string }) => void
   /** Runtime context providers ingested immediately before prompt composition. */
   runtimeContextProviders?: Array<() => ContextMessage | null | undefined>
   /** Clock used for persisted message timestamps. @default Date.now */
@@ -211,6 +266,10 @@ export interface ChatOrchestratorRuntimeDeps {
     provider: string
     failureStage: 'llm_response'
     errorCode: 'llm_response_failed'
+  }) => void
+  /** Called when a queued send is cancelled before provider execution. */
+  onQueuedSendCancelled?: (event: {
+    reason: 'session_generation_changed' | 'session_reset'
   }) => void
   /** Called when a user message send begins. */
   onMessageSendStarted?: (event: {
@@ -501,6 +560,15 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
         sessionMessages: sessionMessagesForSend,
       })
 
+      const outputReleaseMode = deps.getAssistantOutputReleaseMode?.({
+        messageText: sendingMessage,
+        sessionId,
+      }) ?? 'stream'
+      const bufferUntilValidated = outputReleaseMode === 'after-validation'
+      const bufferedOutputEvents: Array<
+        | { type: 'literal', value: string }
+        | { type: 'special', value: string }
+      > = []
       const categorizer = createStreamingCategorizer(deps.getActiveProvider())
       let streamPosition = 0
 
@@ -517,7 +585,10 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
           if (speechOnly.trim()) {
             buildingMessage.content += speechOnly
 
-            await hooks.emitTokenLiteralHooks(speechOnly, streamingMessageContext)
+            if (bufferUntilValidated)
+              bufferedOutputEvents.push({ type: 'literal', value: speechOnly })
+            else
+              await hooks.emitTokenLiteralHooks(speechOnly, streamingMessageContext)
 
             const lastSlice = buildingMessage.slices.at(-1)
             if (lastSlice?.type === 'text') {
@@ -529,14 +600,18 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
                 text: speechOnly,
               })
             }
-            patchForegroundStream(sessionId, buildingMessage)
+            if (!bufferUntilValidated)
+              patchForegroundStream(sessionId, buildingMessage)
           }
         },
         onSpecial: async (special) => {
           if (shouldAbort())
             return
 
-          await hooks.emitTokenSpecialHooks(special, streamingMessageContext)
+          if (bufferUntilValidated)
+            bufferedOutputEvents.push({ type: 'special', value: special })
+          else
+            await hooks.emitTokenSpecialHooks(special, streamingMessageContext)
         },
         onEnd: async (fullText) => {
           if (isStaleGeneration())
@@ -549,7 +624,8 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
             speech: finalCategorization.speech,
             reasoning: reasoningContentField || finalCategorization.reasoning,
           }
-          patchForegroundStream(sessionId, buildingMessage)
+          if (!bufferUntilValidated)
+            patchForegroundStream(sessionId, buildingMessage)
         },
         minLiteralEmitLength: STREAMING_UI_FLUSH_CHUNK_SIZE,
       })
@@ -557,7 +633,7 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
       const toolCallQueue = createQueue<ChatSlices>({
         handlers: [
           async (ctx) => {
-            if (shouldAbort())
+            if (shouldAbort() || bufferUntilValidated)
               return
             if (ctx.data.type === 'tool-call') {
               buildingMessage.slices.push(ctx.data)
@@ -574,16 +650,23 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
       })
 
       const newMessages = buildProviderMessages(sessionMessagesForSend)
-      const systemPromptSupplement = deps.getSystemPromptSupplement?.()?.trim()
-      if (systemPromptSupplement) {
+      const systemPromptSupplement = deps.getSystemPromptSupplement?.({
+        messageText: sendingMessage,
+        sessionMessages: sessionMessagesForSend,
+        sessionId,
+      })
+      const replacementPrompt = (typeof systemPromptSupplement === 'string' ? '' : systemPromptSupplement?.replace)?.trim()
+      const supplementBefore = replacementPrompt ? '' : (typeof systemPromptSupplement === 'string' ? '' : systemPromptSupplement?.before)?.trim()
+      const supplementAfter = replacementPrompt ? '' : (typeof systemPromptSupplement === 'string' ? systemPromptSupplement : systemPromptSupplement?.after)?.trim()
+      if (replacementPrompt || supplementBefore || supplementAfter) {
         const systemMessage = newMessages.find(message => message.role === 'system')
         if (systemMessage) {
-          systemMessage.content = `${systemMessage.content}\n\n${systemPromptSupplement}`
+          systemMessage.content = replacementPrompt || [supplementBefore, systemMessage.content, supplementAfter].filter(Boolean).join('\n\n')
         }
         else {
           newMessages.unshift({
             role: 'system',
-            content: systemPromptSupplement,
+            content: replacementPrompt || [supplementBefore, supplementAfter].filter(Boolean).join('\n\n'),
           })
         }
       }
@@ -651,8 +734,8 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
 
       await deps.llm.stream(options.model, options.chatProvider, newMessages as Message[], {
         headers,
-        tools: options.tools,
-        waitForTools: true,
+        tools: bufferUntilValidated ? undefined : options.tools,
+        waitForTools: !bufferUntilValidated,
         captureToolErrors: true,
         onStreamEvent: async (event: StreamEvent) => {
           switch (event.type) {
@@ -704,7 +787,7 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
               const crossesBoundary
                 = Math.floor(nextReasoning.length / STREAMING_UI_FLUSH_CHUNK_SIZE)
                   > Math.floor(reasoning.length / STREAMING_UI_FLUSH_CHUNK_SIZE)
-              if (!reasoning || crossesBoundary)
+              if (!bufferUntilValidated && (!reasoning || crossesBoundary))
                 patchForegroundStream(sessionId, buildingMessage)
               break
             }
@@ -717,6 +800,56 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
       })
 
       await parser.end()
+
+      const assistantVisibleText = typeof buildingMessage.content === 'string' ? buildingMessage.content : ''
+      const outputPolicy = deps.validateAssistantOutput?.({
+        messageText: assistantVisibleText,
+        sessionId,
+      })
+      if (outputPolicy?.accepted === false) {
+        const replacementText = outputPolicy.replacementText.trim()
+        fullText = replacementText
+        buildingMessage.content = replacementText
+        // A rejected response is one invalid assistant turn. Retaining tool slices,
+        // results, or reasoning would persist unsafe residue beside the replacement.
+        buildingMessage.slices = replacementText ? [{ type: 'text', text: replacementText }] : []
+        buildingMessage.tool_results = []
+        buildingMessage.categorization = { reasoning: '', speech: replacementText }
+        patchForegroundStream(sessionId, buildingMessage)
+        deps.onAssistantOutputRejected?.({
+          ruleIds: outputPolicy.ruleIds ?? [],
+          sessionId,
+        })
+      }
+
+      if (bufferUntilValidated) {
+        // No model-derived literal, special token, tool request, or foreground
+        // content is released before the finalized visible text passes policy.
+        if (outputPolicy?.accepted !== false) {
+          const visibleText = typeof buildingMessage.content === 'string' ? buildingMessage.content : ''
+          buildingMessage.categorization = { reasoning: '', speech: visibleText }
+        }
+        patchForegroundStream(sessionId, buildingMessage)
+        if (outputPolicy?.accepted === false) {
+          const replacementText = typeof buildingMessage.content === 'string' ? buildingMessage.content : ''
+          if (replacementText.trim())
+            await hooks.emitTokenLiteralHooks(replacementText, streamingMessageContext)
+        }
+        else {
+          for (const event of bufferedOutputEvents) {
+            if (event.type === 'literal') {
+              await hooks.emitTokenLiteralHooks(event.value, streamingMessageContext)
+              continue
+            }
+            if (deps.allowBufferedSpecialOutput?.({ special: event.value, sessionId }) === true)
+              await hooks.emitTokenSpecialHooks(event.value, streamingMessageContext)
+          }
+        }
+        // Downstream completion hooks receive only assistant-visible text.
+        // Allowed presentation specials have already been dispatched above.
+        fullText = typeof buildingMessage.content === 'string' ? buildingMessage.content : ''
+      }
+
       deps.onAssistantResponseRendered?.({
         model: options.model,
         latencyMs: Math.round(monotonicNow() - llmRequestStartedAt),
@@ -788,6 +921,7 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
           return
 
         if (deps.session.getSessionGeneration(sessionId) !== generation) {
+          deps.onQueuedSendCancelled?.({ reason: 'session_generation_changed' })
           deferred.reject(new Error('Chat session was reset before send could start'))
           return
         }
@@ -838,6 +972,7 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
         continue
 
       queued.cancelled = true
+      deps.onQueuedSendCancelled?.({ reason: 'session_reset' })
       queued.deferred.reject(new Error('Chat session was reset before send could start'))
     }
 

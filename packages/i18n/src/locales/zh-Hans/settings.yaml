@@ -298,6 +298,94 @@ pages:
         error:
           fallback: Could not start deletion. Try again later.
   card:
+    companion_import:
+      activate: 激活预设
+      activated: 中文陪伴预设已激活
+      binding_warning: 部分模型绑定不可用，已保留当前选择
+      binding_warnings:
+        display_model_unavailable: 显示模型“{requested}”不可用。
+        model_unavailable: 模型“{requested}”不在当前已加载的模型列表中。
+        provider_unavailable: Provider“{requested}”尚未配置或不可用。
+      confirm_replace: 确认替换同 ID 预设
+      current_models: 保留当前模型选择
+      description: 导入经过校验的 YAML 或 JSON 中文陪伴预设。预览不会修改当前角色。
+      import_errors:
+        file_changed_too_large: 文件在读取过程中发生变化，且大小超过 256 KiB。
+        file_too_large: 预设文件不能超过 256 KiB。
+        invalid_format: 文件不是有效的 YAML 或 JSON，或包含重复字段、过多别名。
+        invalid_utf8: 预设文件必须使用有效的 UTF-8 编码。
+        read_failed: 无法读取所选文件，请检查文件权限后重试。
+        stat_failed: 无法检查所选文件，请确认文件仍然存在。
+        unknown: 导入失败，请检查文件后重试。
+        unsupported_extension: 仅支持 .yaml、.yml 和 .json 文件。
+      models: 模型绑定
+      personality: 人格特征
+      prompt_preview: 开发态提示词预览与来源
+      prompt_sections: 提示词分区
+      read_error: 无法读取预设
+      replace_confirmed: 已确认替换；现在可以激活。
+      replace_warning: 将替换同 ID 预设
+      replace_warning_description: 激活后会替换现有的同 ID 角色卡；如有需要，可使用“恢复上一个角色”撤销本次激活。
+      restore: 禁用陪伴预设并恢复之前角色
+      select: 选择陪伴预设
+      title: 中文陪伴预设
+      unknown_error: 未知的预设导入错误
+      validation_error: 预设校验失败
+      validation_errors:
+        forbidden_prompt_override: “{path}”试图覆盖安全规则或声明未接入的感知能力。
+        invalid_value: “{path}”的值或格式无效。
+        missing_required_field: 缺少必填字段“{path}”。
+        sensitive_value: “{path}”包含凭据或本机路径，不能作为可分发预设导入。
+        unknown_field: “{path}”不是 CompanionPreset v1 支持的字段。
+        unsupported_schema_version: 当前仅支持 CompanionPreset schema_version 1。
+      validation_suggestions:
+        correct_field_value: 按示例预设修正该字段的类型、枚举或格式。
+        provide_required_value: 添加该必填字段后重新导入。
+        remove_sensitive_value: 删除 API key、访问令牌或本机绝对路径后重新导入。
+        remove_unknown_field: 删除该字段；不要依赖静默忽略未知配置。
+        remove_unsafe_prompt_instruction: 删除覆盖安全规则、伪造工具权限或虚构感知能力的指令。
+        use_schema_version_1: 将预设显式迁移为 schema_version 1；系统不会自动降级。
+      validation_success: 预设结构和安全边界校验通过
+    worldbook:
+      title: 世界书
+      description: 添加有界、可触发的角色与世界事实，并将其用于当前聊天提示词。
+      add_entry: 添加条目
+      remove_entry: 删除
+      empty: 暂无世界书条目。
+      name: 世界书名称
+      book_description: 世界书说明
+      scan_depth: 扫描最近消息数
+      token_budget: 模型 Token 预算
+      tokenizer_idle: 请选择 Provider 和模型以检查精确 Token 预算支持；硬上限仍然有效。
+      tokenizer_loading: 正在加载所选模型的 tokenizer；就绪前仅执行硬上限。
+      tokenizer_ready: 所选模型已支持精确 Token 计数，将严格执行此预算。
+      tokenizer_unsupported: 所选模型没有已验证的 tokenizer 映射，无法精确执行此预算；硬上限仍然有效。
+      tokenizer_failed: 已验证的 tokenizer 加载失败，当前不执行此预算；硬上限仍然有效。
+      recursive_scanning: 允许有界递归匹配
+      entry_number: 条目 {number}
+      entry_name: 条目名称
+      comment: 编辑备注
+      keys: 主触发词
+      keys_hint: 每行填写一个明确的专名、别名或稳定触发词；运行时会忽略宽泛的单字词。
+      secondary_keys: 次触发词
+      content: 注入内容
+      position: 提示词位置
+      before_character: 角色定义之前
+      after_character: 角色定义之后
+      priority: 优先级
+      insertion_order: 插入顺序
+      enabled: 启用
+      constant: 始终生效
+      use_regex: 使用正则表达式
+      selective: 必须命中次触发词
+      case_sensitive: 区分大小写
+      validation_error: 保存前请修正世界书中的无效字段：{path}。
+      warnings:
+        invalid_book: 保存前请修正不合法的世界书字段。
+        empty_key: 请删除空触发词。
+        overly_broad_key: 请将宽泛或单字触发词改为专名、别名或稳定触发词。
+        unsafe_regex: 该正则使用了不支持的无界或高级语法，请改用文本触发词或有限量词。
+        invalid_regex: 请修正不合法的正则触发词。
     activate: 激活
     active: 已激活
     active_badge: 当前使用中
@@ -374,6 +462,110 @@ pages:
     modules: 模块
     name_asc: 名称 (A-Z)
     name_desc: 名称 (Z-A)
+    character_source_import:
+      entry_title: 从角色设定文档创建角色卡
+      entry_description: 分析 UTF-8 文本文档，审阅证据和冲突后创建一张不会自动激活的角色卡。
+      open: 导入角色设定
+      title: 从文本导入角色
+      file_label: 角色设定文件
+      supported_formats: 支持 .docx、.txt、.md、.json、.yaml 和 .yml
+      pick_file: 选择文件…
+      pick_failed: 无法打开文件选择器
+      no_electron: 仅桌面版支持选择本地文件
+      provider_label: 分析服务来源
+      model_label: 分析模型
+      no_provider: 尚未配置可用服务来源
+      cloud_confirm: 我了解脱敏后的文件内容将发送给所选服务来源和模型进行分析
+      redaction_notice: 上传前将替换 {count} 处高置信度凭据或本机路径；原始文档只在本次导入期间保存在内存中。
+      start: 开始分析
+      analyzing: 正在分析角色…
+      retry_count: 重试次数
+      back: 返回
+      create_card: 创建角色卡
+      not_activated_notice: 新角色卡不会自动激活。请在角色卡列表中确认后手动激活。
+      proceed_to_confirm: 检查并创建
+      confirm_inferred: 确认推断内容
+      inferred_lore_title: 推断出的世界书事实需要逐项确认
+      name_required: 创建角色卡前必须填写角色名称。
+      unresolved_conflicts: 请先处理所有冲突事实。
+      conflicts_title: 处理事实冲突
+      conflicts_hint: 以下事实相互冲突，请逐项选择保留方式。
+      conflict_category: '冲突类型：{category}'
+      keep_first: 保留第一项
+      keep_both: 全部保留
+      discard_all: 全部舍弃
+      review_title: 审阅角色草稿
+      story: 背景故事
+      relationships: 人物关系
+      greetings: 问候语
+      message_examples: 来源对话示例
+      summary_title: 确认创建角色卡
+      items: 项
+      lore_entries: 世界书条目
+      unconfirmed_inferred: 未确认的推断内容
+      warnings: 警告
+      blocking_issues: 阻塞问题
+      unclassified_blocks: 未分类原文块
+      review_unclassified: 查看未分类原文摘录
+      world_book: 世界书
+      select_candidate: 发现多个角色
+      select_candidate_hint: 请选择要提取的主要角色。
+      evidence_blocks: '{count} 个证据块'
+      evidence: 来源证据
+      support:
+        explicit: 原文明确说明
+        inferred: 模型推断
+        ambiguous: 存在歧义
+      evidence_status:
+        unverified: 未验证
+        verified: 已验证
+        rejected: 已拒绝
+      style:
+        tone: 语气
+        address_terms: 称谓
+        pronouns: 自称与代词
+        sentence_patterns: 句式
+        vocabulary: 用词
+        catchphrases: 口头禅
+        emotional_expression: 情绪表达
+        prohibited_expressions: 禁止表达
+      error: 分析失败
+      error_file_too_large: 文本文件不能超过 1 MB，Word 文档不能超过 10 MB
+      error_invalid_docx: Word 文档无效、损坏或没有可读取的正文
+      error_file_changed_during_read: 读取期间文件发生变化
+      error_unsupported_extension: 不支持该文件类型
+      error_invalid_utf8: 文件不是有效的 UTF-8 文本
+      error_read_failed: 无法读取文件
+      error_stat_failed: 无法检查文件状态
+      error_invalid_request: 请求 ID 无效
+      errors:
+        unknown: 未知错误中断了导入。
+        aborted: 分析已取消。
+        cloud_confirmation_required: 开始分析前需要确认本次内容上传。
+        provider_initialization_failed: 无法初始化所选服务来源或模型。
+        provider_incompatible: 所选服务来源无法返回要求的结构化结果。
+        candidate_extraction_failed: 候选角色识别失败，请检查网络或更换分析模型后重试。
+        fact_extraction_failed: 角色事实抽取失败，请检查网络或更换分析模型后重试。
+        validation_failed: 分析结果未通过本地证据校验，请重试或更换分析模型。
+        structured_output_missing: 服务来源未返回要求的结构化结果。
+        invalid_candidate_output: 候选角色结果或其证据无效。
+        invalid_fact_output: 抽取到的事实或其证据无效。
+        no_candidates_found: 未在文件中找到有充分证据的角色候选。
+        invalid_candidate_selection: 所选角色已失效，请重新开始导入。
+        draft_validation_failed: 审阅后的草稿不合法，请返回并修正字段。
+        card_creation_failed: 无法将草稿安全转换为角色卡。
+      state:
+        idle: 等待开始
+        reading: 正在读取文件
+        segmenting: 正在分段
+        discovering_candidates: 正在识别候选角色
+        awaiting_selection: 等待选择角色
+        extracting: 正在抽取事实
+        merging: 正在合并事实
+        reviewing: 正在生成审阅草稿
+        completed: 已完成
+        failed: 已失败
+        cancelled: 已取消
     no_cards: 还没有任何角色卡，点击上方按钮上传一个吧！
     no_results: 没有找到匹配的角色卡
     personality: 性格
@@ -391,7 +583,25 @@ pages:
     title: AIRI 角色卡
     try_different_search: 尝试使用其他关键词搜索
     upload: 上传
-    upload_desc: 点击或拖拽文件到此处上传
+    upload_desc: 点击或拖拽 CCv3 JSON 或 PNG 文件到此处上传
+    import_errors:
+      title: 角色卡导入失败
+      read_failed: 无法安全读取所选文件。
+      try_again: 请检查文件后重试。
+      codes:
+        invalid_json: 文件不是有效的 JSON。
+        invalid_json_value: 角色卡包含 JSON 无法安全表示的值。
+        invalid_schema: 该字段不符合 Character Card V3 契约。
+        missing_png_metadata: PNG 不包含 Character Card V3 元数据。
+        resource_limit: 角色卡超过安全大小或嵌套限制。
+        unsafe_key: 角色卡包含不安全的对象属性。
+      suggestions:
+        invalid_json: 修复 JSON 语法后重新导入。
+        invalid_json_value: 仅使用有限数值和标准 JSON 值。
+        invalid_schema: 按 Character Card V3 格式修正对应字段。
+        missing_png_metadata: 请选择 CCv3 角色卡 PNG，或导入对应的 JSON 文件。
+        resource_limit: 删除过大、重复或嵌套过深的角色卡数据。
+        unsafe_key: 删除与对象原型相关的属性名。
   memory:
     description: 存放记忆的地方，以及策略
     title: 记忆体
@@ -618,6 +828,13 @@ pages:
       enable-description: >-
         在 Chat 界面 中包含 Minecraft 自己的上下文和认知，并保持 Passive runtime visibility 启用。
       configured: 我的世界已正确配置！
+      perception:
+        title: 可信游戏感知
+        description: 只接收已认证且通过严格结构校验的 Minecraft 状态事件。自由文本、命令、重复事件和过期事件不会进入聊天上下文。
+        enable: 允许本次会话感知
+        disable: 停止并撤销授权
+        counts: '已接受：{accepted} · 已拒绝：{rejected} · 已抑制：{suppressed}'
+        last-rejection: '最近的安全拒绝码：{code}'
       read-only:
         title: 只读外壳
         description: >-
@@ -632,19 +849,92 @@ pages:
         latest-context: 最后的 Bot 状态
         waiting: 等待一个新的 Bot 上下文推送。
         unknown: 未知
+        safe-only: 运行信息只包含受控事实代码；原始游戏文字和完整负载不会被保留。
       debug:
         title: Minecraft流量
         empty: 还没有观察到任何 Minecraft 流量。
         source: '来源: {source}'
+        outcome: '结果：{outcome}'
       status:
         service-online: 服务已上线
         service-offline: 服务已离线
         no-runtime-context: 尚未观察到 Bot 状态
         last-context-seconds: '最后一次 Bot 状态更新：{seconds} 秒之前'
         last-context-stale: '最后一次 Bot 状态：挂起'
+    perception:
+      title: 可信感知
+      description: 管理屏幕与摄像头的明确授权、本地处理、当前分析器、新鲜事实、暂停和停止。
     hearing:
       description: 语音识别
       title: 听觉
+      voice-conversation:
+        preferences:
+          title: 语音对话
+          description: 麦克风轮次的安全运行时偏好；尚未支持的模式保持不可用。
+          mode: 对话模式
+          interruption-policy: 打断策略
+          vad-threshold: VAD 阈值
+          min-speech: 最短语音时长
+          trailing-silence: 尾部静音时长
+          cloud-privacy: 我了解已配置的云端 TTS 会接收助手文本
+          cloud-privacy-description: 麦克风音频仍只进入已配置的 ASR 路径；云端 TTS 只接收通过检查的助手文本。
+        modes:
+          vad: VAD 轮流说话
+          streaming: 流式 ASR
+          push-to-talk-unavailable: 按住说话（当前版本不可用）
+        interruptions:
+          disabled: 关闭
+          push: 点击打断
+          vad-unavailable: VAD 自动插话（缺少回声保护时不可用）
+        local-asr:
+          title: 本地 ASR 模型切换
+          description: Qwen 停止时也会显示；只有在你点击后才启动本地服务，并在健康验证通过后切换。
+          current: '当前：{provider} / {model}'
+          current-other: 当前 ASR 不在 M2 声明的本地模型矩阵中。
+          qwen-label: Qwen3-ASR 0.6B（本地流式）
+          sensevoice-label: SenseVoice-Small（本地备用）
+          use-qwen: 启动并切换到 Qwen3-ASR
+          use-sensevoice: 切换到 SenseVoice
+          in-use: '正在使用：{provider}'
+          selected: 当前选中
+          selected-indicator: 绿色圆点表示当前已选 Provider；每次切换都会先启动并重新检查健康状态。
+          switching: 正在启动、健康检查并切换本地 ASR…
+          configure: 配置 Provider 地址
+          errors:
+            desktop_required: 只有 AIRI 桌面版可以启动本地 ASR。
+            launcher_missing: 当前安装中缺少所选本地 ASR 的启动程序。
+            launch_failed: 无法启动所选本地 ASR，请检查本地模型环境。
+            startup_timeout: 所选本地 ASR 在限定时间内未完成启动。
+            app_stopping: AIRI 正在退出，无法切换本地 ASR。
+            validation_failed: 本地 ASR 未通过健康验证，已保留原模型。
+            unexpected: 切换本地 ASR 时发生错误，已保留原模型。
+          notices:
+            previous-service-not-managed: 旧服务不是由当前 AIRI 会话启动，因此没有强制关闭；如仍在运行，请手动关闭其终端。
+            previous-service-stop-failed: 新模型已切换成功，但旧本地服务未能关闭，请手动关闭其终端。
+        diagnostics:
+          title: 语音诊断
+          description: 仅显示运行时能力和延迟摘要，不显示转写正文或音频内容。
+          asr: ASR Provider / 模型
+          asr-streaming: ASR 流式输入
+          tts: TTS Provider / 模型 / 音色
+          tts-streaming: TTS 传输能力
+          supported: 支持
+          not-supported: 不支持
+          rest-aggregated: REST/SSE 聚合音频（非真流式）
+          streaming: 真流式音频
+          not-declared: Provider 未声明
+          last-error: 最近错误码
+          asr-latency: 语音开始到首个增量
+          tts-latency: 请求到首段音频
+          style-warnings: 音色风格能力警告（开发模式）
+          none: 暂无数据
+          warnings:
+            voice-style.unsupported-style: 当前 Provider 不支持风格控制，已降级为 neutral 或 warm。
+            voice-style.unsupported-prosody: 当前 Provider 不支持韵律控制，已移除语速、音高和音量提示。
+            voice-style.clamped-rate: 语速已限制在 Provider 支持范围内。
+            voice-style.clamped-pitch: 音高已限制在 Provider 支持范围内。
+            voice-style.clamped-volume: 音量已限制在 Provider 支持范围内。
+            voice-style.unsafe-preferred-style: 当前安全策略已禁用 playful 风格。
       sections:
         section:
           provider-selection:
@@ -675,6 +965,19 @@ pages:
       configured: Discord已正确配置！
     speech:
       description: 语音合成
+      local-service-switch:
+        switching: 正在启动并检查本地语音服务…
+        errors:
+          desktop_required: 只有 AIRI 桌面版可以启动本地语音服务。
+          launcher_missing: 当前安装中缺少本地语音服务启动程序。
+          launch_failed: 本地语音服务启动失败，请检查模型环境。
+          startup_timeout: 本地语音服务在限定时间内未完成启动。
+          app_stopping: AIRI 正在退出，无法切换本地语音服务。
+          validation_failed: 本地语音服务未通过健康检查，已保留原 Provider。
+          unexpected: 切换语音 Provider 时发生错误，已保留原 Provider。
+        notices:
+          previous-service-not-managed: 旧服务不是由当前 AIRI 会话启动，因此没有强制关闭；如仍在运行，请手动关闭其终端。
+          previous-service-stop-failed: 新 Provider 已切换成功，但旧本地服务未能关闭，请手动关闭其终端。
       sections:
         section:
           playground:
@@ -997,6 +1300,79 @@ pages:
       app-local-audio-transcription:
         title: 应用内（本地）
         description: https://github.com/moeru-ai/xsai-transformers
+      qwen3-asr-local:
+        title: Qwen3-ASR（本地流式）
+        description: 运行在本机 WSL2 中的 Qwen3-ASR 0.6B，持续接收麦克风音频块并返回增量识别结果。
+        settings:
+          local_only_title: WSL2 本地流式语音识别
+          local_only_description: 服务运行于 Ubuntu WSL2，且只在点击下方验证按钮后启动；模型权重留在本机，音频只发送到 127.0.0.1。
+          configuration_title: 流式识别设置
+          configuration_description: Qwen3-ASR 持续接收 16 kHz 麦克风音频；开始语音时建立会话，停止、切换模型或 TTS 播放时立即结束会话。
+          model_label: 识别模型
+          model_description: 当前加载 Qwen3-ASR 0.6B 的 vLLM 流式后端。
+          model_qwen3_asr_06b: Qwen3-ASR 0.6B（WSL2 / vLLM）
+          language_label: 语言提示
+          language_description: 默认强制中文以提高中文短句稳定性；多语言场景可选择自动识别。
+          language_zh: 中文
+          language_auto: 自动识别
+          language_en: 英语
+          language_ja: 日语
+          language_ko: 韩语
+          endpoint_title: 流式服务地址
+          endpoint_label: Qwen3-ASR 地址
+          endpoint_description: 默认使用 http://127.0.0.1:8001/；必须是本机回环地址。
+          ready_title: Qwen3-ASR 流式服务已就绪
+          ready_description: AIRI 可以持续发送麦克风音频，并在停止时释放当前识别会话。
+          unavailable_title: Qwen3-ASR 流式服务尚未就绪
+          validate_and_activate_button: 验证并设为流式 ASR
+          starting_button: 正在启动 Qwen3-ASR…
+          activation_failed: Qwen3-ASR 已启动，但未通过流式健康检查。
+          start_errors:
+            desktop_required: 只有 AIRI 桌面版可以启动此本地服务。
+            launcher_missing: 当前 AIRI 安装中缺少 Qwen3-ASR 启动程序。
+            launch_failed: 无法启动 Qwen3-ASR，请检查 WSL2 和本地模型环境。
+            startup_timeout: Qwen3-ASR 在限定时间内未完成启动。
+            app_stopping: AIRI 正在退出，本地服务未启动。
+          validation_invalid_endpoint: 请输入本机地址，例如 http://127.0.0.1:8001/。
+          validation_not_ready: Qwen3-ASR 模型仍在加载或服务异常，请等待启动完成后重试。
+          validation_not_streaming: 该端点只是批量转写服务，不接受持续麦克风音频。请启动 AIRI 的 Qwen3-ASR streaming bridge。
+          validation_unreachable: Qwen3-ASR 尚未运行，请使用验证按钮启动。
+      sensevoice-local:
+        title: SenseVoice（本地）
+        description: 本机 FunASR SenseVoice-Small 语音识别服务，音频不会离开本机。
+        settings:
+          local_only_title: 本地语音识别
+          local_only_description: 请先双击 services/stt/SenseVoice-Small/start-stt.bat 并保持终端窗口开启。该服务仅监听本机地址，不需要 API Key。
+          configuration_title: 识别设置
+          configuration_description: SenseVoice-Small 使用录音完成后的识别路径，适合中文语音对话。
+          model_label: 识别模型
+          model_description: 本地服务当前封装的是 FunASR SenseVoice-Small。
+          model_sensevoice_small: SenseVoice-Small（FunASR，本地）
+          language_label: 语言提示
+          language_description: 中文优先可减少中文短句的自动语言识别漂移；不确定时可选自动。
+          language_zh: 中文（简体优先）
+          language_auto: 自动识别
+          language_en: 英语
+          language_ja: 日语
+          language_ko: 韩语
+          endpoint_title: 本地服务地址
+          endpoint_label: OpenAI 兼容地址
+          endpoint_description: 保持为本机的 127.0.0.1 或 localhost 地址；不支持远程端点。
+          ready_title: SenseVoice 已就绪
+          ready_description: 本地服务已加载模型，可以用于 AIRI 语音对话。
+          unavailable_title: SenseVoice 尚未就绪
+          validate_and_activate_button: 启动、验证并设为中文语音识别
+          starting_button: 正在启动 SenseVoice…
+          activation_failed: SenseVoice 已启动，但未通过健康检查。
+          start_errors:
+            desktop_required: 只有 AIRI 桌面版可以启动此本地服务。
+            launcher_missing: 当前 AIRI 安装中缺少 SenseVoice 启动程序。
+            launch_failed: 无法启动 SenseVoice，请检查本地运行环境和模型文件。
+            startup_timeout: SenseVoice 在限定时间内未完成启动。
+            app_stopping: AIRI 正在退出，本地服务未启动。
+          validation_invalid_endpoint: 请输入本机 SenseVoice 地址，例如 http://127.0.0.1:8765/v1/。
+          validation_not_ready: SenseVoice 未报告就绪状态，请使用验证按钮启动后重试。
+          validation_unreachable: 无法连接 SenseVoice，请使用验证按钮启动。
       app-local-audio-speech:
         title: 应用内（本地）
         description: https://github.com/moeru-ai/xsai-transformers
@@ -1257,6 +1633,102 @@ pages:
       minimax-speech:
         description: minimax.io
         title: MiniMax Speech
+        settings:
+          activation_failed: MiniMax 语音服务尚未配置完成或验证失败。
+          activation_ready_description: 已设为 AIRI 当前语音；文字对话和语音通话都会使用 MiniMax。
+          activation_ready_title: MiniMax 当前语音已就绪
+          activate_button: 验证并设为当前语音
+          cloud_description: 语音通话回复文本会发送至已配置的 MiniMax 服务生成语音。请仅在你同意云端处理时启用。
+          cloud_title: 云端语音与隐私
+          configuration_description: 可选择 speech-2.8-turbo 或 speech-2.8-hd；实际请求会严格使用这里选择的模型。API 密钥只保存在 Provider 配置中。
+          configuration_title: MiniMax 通话语音配置
+          endpoint_description: 海外 API Key 使用 https://api.minimax.io；中国区 API Key 使用 https://api.minimaxi.com。语音克隆仅会向所选官方区域地址上传音频。
+          endpoint_label: MiniMax API 地址
+          endpoint_title: API 地址
+          model_label: 模型
+          voice_description: 请选择一个角色通话用音色；未选择时不会静默回退到其他音色。
+          voice_label: 通话音色
+          voice_catalog_failed: 无法读取当前 MiniMax 账号的可用音色。请检查 API Key、账号区域和网络后重试。
+          voice_required: 请先选择一个 MiniMax 通话音色。
+          voice_unavailable: 当前 MiniMax 账号无法使用音色 {id}。请从已同步的账号音色中重新选择。
+          clone:
+            api_key_required: 请先在左侧填写 MiniMax API Key；密钥不会显示在此表单中。
+            consent_description: 点击创建时，所选两段音频会上传到 MiniMax 的语音克隆接口；AIRI 不会保存音频、文本或本地路径。
+            consent_label: 我确认拥有这些音频的使用与克隆授权，并同意将所选文件上传到 MiniMax
+            custom_voice_name: 自定义音色：{id}
+            description: 仅在你明确确认后上传一段克隆源和一段带精确文本的短提示音频。创建结果只保存安全的 voice ID。
+            errors:
+              api-key-required: 未检测到 MiniMax API Key。
+              api-key-invalid: 当前 MiniMax API Key 无效、已失效，或与所选账户区域不匹配。请在 MiniMax 控制台创建有效的 API Key 后重新填写。
+              account-balance-insufficient: MiniMax 账户余额不足，暂时无法继续创建或使用此音色。
+              clone-failed: MiniMax 未能创建此音色；请检查音色 ID 是否已存在，以及文件和文本是否符合要求。
+              invalid-prompt-audio: 提示音频必须是小于 8 秒的 wav、mp3 或 m4a 文件，且不超过 20 MB。
+              invalid-prompt-text: 提示文本不能为空、不得超过 200 字符，并且要与提示音频逐字对应。
+              invalid-preview-text: 试听文本不得超过 1000 字符。
+              invalid-endpoint: MiniMax API 地址不是受支持的官方中国区或海外区地址。请使用 api.minimaxi.com 或 api.minimax.io。
+              invalid-source-audio: 克隆源必须是 10 秒到 5 分钟的 wav、mp3 或 m4a 文件，且不超过 20 MB。
+              invalid-voice-id: 音色 ID 须以英文字符开头，长度为 8–256，只能包含字母、数字、-、_，且不能以 -、_ 结尾。
+              network-failed: 无法连接 MiniMax；请检查网络、账户区域和 API Key 后重试。
+              upload-failed: MiniMax 未接受上传的音频；请检查格式、时长、大小与账户权限。
+              usage-limit-exceeded: MiniMax 账户当前用量已达到限制，请稍后再试。
+              voice-cloning-unavailable: 当前 MiniMax 账户尚未开通语音克隆。请先在 MiniMax 完成所需的账户认证或开通权限。
+              voice-id-duplicate: 这个音色 ID 已存在于 MiniMax 账户中，请换一个新的 ID。
+            existing:
+              description: 用于导入已在 MiniMax 控制台或其他 AIRI 设备中成功创建的自定义音色。仅保存安全的 voice ID，不保存音频、路径或密钥。
+              errors:
+                invalid-voice-id: 音色 ID 格式无效。它须以英文字符开头，长度为 8–256，只能包含字母、数字、-、_，且不能以 -、_ 结尾。
+                registration-failed: 无法将此音色设为通话音色。请确认 MiniMax 配置和音色 ID。
+              submit: 添加并设为通话音色
+              title: 添加已创建的自定义音色
+              voice_id_description: 只接受你有权使用的 MiniMax 自定义 voice ID。
+              voice_id_label: 已创建的音色 ID
+            preview_description: 生成试听会额外消耗 MiniMax 的文字转语音额度；默认关闭。
+            preview_label: 创建时同时生成付费试听
+            preview_text_description: 试听文字不超过 1000 字符；仅在开启试听时发送。
+            preview_text_label: 试听文本
+            prompt_description: 小于 {max} 秒；音色和发音应清晰。必须填写与其逐字对应的提示文本。
+            prompt_label: 短提示音频
+            prompt_placeholder: 选择提示音频（例如 firefly_0001.wav）
+            prompt_text_description: 仅用于 MiniMax 的提示音频一致性校验，最多 200 字符。
+            prompt_text_label: 提示音频对应文本
+            prompt_text_placeholder: 输入提示音频逐字对应的文本
+            privacy_note: 仅在点击下方按钮后，所选音频与提示文本才会发送到 MiniMax。上传内容可能受 MiniMax 的账户、区域和内容规则约束。
+            source_description: 单个文件，时长 {min} 秒至 {max} 分钟，wav、mp3 或 m4a，不超过 20 MB。
+            source_label: 克隆源音频
+            source_placeholder: 选择本地合成的克隆源音频
+            submit: 确认上传并创建音色
+            title: 克隆自定义通话音色
+            voice_id_description: 创建后将作为角色的安全 voice ID 保存；不能与 MiniMax 账户中已有 ID 重复。
+            voice_id_label: 新音色 ID
+      gpt-sovits-local:
+        description: 仅本机运行的 GPT-SoVITS Firefly 语音桥接服务。
+        title: GPT-SoVITS（本地）
+        settings:
+          activation_failed: GPT-SoVITS 未通过本机健康检查；服务可能尚未启动，或模型与固定音色仍在加载。
+          activation_ready_description: 已设为 AIRI 当前语音；文字对话和语音通话都会使用本地 Firefly。
+          activation_ready_title: 本地语音已就绪
+          activate_button: 启动、健康检查并设为当前语音
+          starting_button: 正在启动 GPT-SoVITS…
+          configuration_description: 模型和参考音色由本机桥接服务固定管理，角色卡不会保存路径或参考文本。
+          configuration_title: 本地 Firefly 配置
+          endpoint_description: 仅接受 localhost 或 127.0.0.1 地址，避免把语音内容发送到远端。
+          endpoint_label: 本地桥接地址
+          endpoint_title: 本地服务地址
+          local_only_description: 服务只在点击下方按钮后启动；健康检查仅访问本机 127.0.0.1，确认桥接服务、模型和固定音色已就绪，不会发送对话文本。语音文本、参考音频和权重文件均留在本机。
+          local_only_title: 本地隐私模式
+          model_label: 模型
+          model_name: Firefly v4（本地）
+          start_errors:
+            desktop_required: 只有 AIRI 桌面版可以启动此本地服务。
+            launcher_missing: 当前 AIRI 安装中缺少 GPT-SoVITS 启动程序。
+            launch_failed: 无法启动 GPT-SoVITS，请检查本地运行环境和模型文件。
+            startup_timeout: GPT-SoVITS 在限定时间内未完成启动。
+            app_stopping: AIRI 正在退出，本地服务未启动。
+          validation_invalid_endpoint: 本地 GPT-SoVITS 只能使用 localhost 或 127.0.0.1 地址。
+          validation_not_ready: 本地 GPT-SoVITS 尚未就绪或仍在加载模型。
+          validation_unreachable: 本地 GPT-SoVITS 尚未运行，请使用验证按钮启动。
+          voice_label: 音色
+          voice_name: AIRI Firefly
       mimo:
         description: api.xiaomimimo.com
         title: Xiaomi MiMo

@@ -752,6 +752,54 @@ describe('for ExtensionHost', () => {
       },
     })
   })
+
+  it('caps structured Minecraft perception capability at the extension grant ceiling', async () => {
+    const host = new ExtensionHost()
+    const extension = defineExtension({
+      id: 'airi-extension-minecraft-perception',
+      async setup(ctx) {
+        const module = await ctx.modules.register({
+          id: 'minecraft-perception-source',
+          permissions: {
+            capabilities: [
+              {
+                key: 'perception.minecraft.structured',
+                actions: ['wait', 'snapshot'],
+              },
+              {
+                key: 'perception.camera.structured',
+                actions: ['wait'],
+              },
+            ],
+          },
+        })
+
+        expect(module.permissions.capabilities).toEqual([
+          {
+            key: 'perception.minecraft.structured',
+            actions: ['wait'],
+          },
+        ])
+      },
+    })
+
+    await host.startExtension(extension, {
+      manifest: {
+        apiVersion: 'v1',
+        kind: 'manifest.extension.airi.moeru.ai' as const,
+        id: 'airi-extension-minecraft-perception',
+        permissions: {
+          capabilities: [
+            {
+              key: 'perception.minecraft.structured',
+              actions: ['wait'],
+            },
+          ],
+        },
+        entrypoints: {},
+      },
+    })
+  })
 })
 
 describe('for FileSystemLoader', () => {
@@ -911,17 +959,17 @@ describe('for FileSystemLoader', () => {
     expect(host.resolveEntrypointFor(runtimeEntryManifest, {
       cwd: '/tmp/extension',
       runtime: 'node',
-    })).toBe('/tmp/extension/node-entry.ts')
+    })).toBe(join('/tmp/extension', 'node-entry.ts'))
 
     expect(host.resolveEntrypointFor(defaultFallbackManifest, {
       cwd: '/tmp/extension',
       runtime: 'node',
-    })).toBe('/tmp/extension/default-entry.ts')
+    })).toBe(join('/tmp/extension', 'default-entry.ts'))
 
     expect(host.resolveEntrypointFor(electronFallbackManifest, {
       cwd: '/tmp/extension',
       runtime: 'node',
-    })).toBe('/tmp/extension/electron-entry.ts')
+    })).toBe(join('/tmp/extension', 'electron-entry.ts'))
   })
 
   it('should preserve absolute runtime entrypoints', () => {

@@ -29,6 +29,195 @@ docs:
   'logging-in': Signing in...
   'account': Account
   'logout': Sign out
+perception-runtime:
+  remote-read-only: '另一個 AIRI 視窗正在擷取{sources}。本視窗為唯讀狀態，不能再啟動第二個擷取工作階段。'
+  remote-indicator-title: 感知正在另一個視窗執行
+  remote-indicator-item: '{source}：{state}'
+  remote-indicator-description: 請回到擁有擷取權的視窗暫停或停止；本視窗只接收有限狀態，不接收影格或事實。
+  source:
+    screen: 桌面
+    camera: 攝影機
+    minecraft: Minecraft
+  state:
+    idle: 未啟用
+    starting: 正在啟動
+    running: 正在擷取
+    paused: 已暫停
+    stopping: 正在停止
+    failed: 失敗
+    stopped: 已停止
+perception-screen:
+  tab: 桌面
+  title: 可信桌面觀察
+  description: 選擇一個螢幕或視窗。AIRI 只使用已核准的本機模型分析稀疏變化影格。
+  privacy-notice: 影格只存在記憶體並僅在本機處理，不會寫入歷史或日誌；AIRI 自身視窗會排除於擷取之外。
+  local-only: 僅本機
+  indicator-description: 桌面觀察會持續顯示，你可以隨時暫停或停止。
+  source-label: 螢幕或視窗
+  select-source: 選擇來源
+  refresh: 重新整理
+  refreshing: 正在重新整理…
+  no-sources: 找不到可用的外部螢幕或視窗。
+  consent: 我允許 AIRI 在本次工作階段中僅於本機觀察所選來源；我知道敏感頁面會自動暫停，並可隨時停止。
+  sensitive-pause: 遇到敏感頁面時暫停分析
+  start: 開始觀察
+  starting: 正在啟動本機模型…
+  pause: 暫停
+  stop: 停止並撤銷授權
+  enter-privacy-pause: 隱私暫停
+  leave-privacy-pause: 結束隱私暫停
+  fact-count: '{count} 筆新鮮事實'
+  view-results: 查看觀察結果
+  facts-title: 可信事實與診斷
+  fact-counts: '接受 {accepted} · 抑制 {suppressed} · 撤回 {revoked}'
+  no-facts: 目前沒有可用的有界事實；這裡不會顯示原始影格或模型完整回應。
+  value-redacted: 自由文字值已從診斷中隱藏。
+  user-confirmed: 使用者已確認
+  fact-metadata: '信心度 {confidence}% · {age} 秒前 · TTL {ttl} 秒 · {source}/{processing}'
+  suppression-reason: '抑制原因：{reason}'
+  confirm-fact: 確認準確
+  correct-fact: 並非如此
+  clear-facts: 清除本次工作階段事實
+  capture-profile: '{resolution} · 目標 {cadence}'
+  capture-counts: '取樣 {attempts} · 接受 {accepted} · 丟棄 {dropped} · 事實結果 {facts}'
+  error-with-code: '桌面觀察無法繼續（{code}），沒有保留任何影格。'
+  state:
+    idle: 桌面觀察未開啟
+    starting: 正在啟動桌面觀察
+    running: 正在觀察桌面
+    paused: 桌面觀察已暫停
+    stopping: 正在停止桌面觀察
+    failed: 桌面觀察失敗
+perception-camera:
+  tab: 攝影機
+  title: 可信本機攝影機感知
+  description: MediaPipe、OpenCV.js 4.13.0 與 YOLOX-Nano 只把目前影格轉換為短期客觀事實。
+  privacy-notice: 攝影機影格只存在記憶體並僅在本機處理；不啟用麥克風、雲端上傳、錄製、身分辨識或影格歷史。
+  local-only: 僅本機攝影機
+  indicator-description: 攝影機目前正用於本機感知；停止後會立即釋放視訊軌道和全部分析器。
+  consent: 我允許 AIRI 在本次工作階段僅於本機使用攝影機，並只產生列出的客觀事實；我可以隨時停止並撤銷授權。
+  start: 開始攝影機感知
+  starting: 正在啟動本機分析器…
+  pause: 暫停
+  stop: 停止並撤銷授權
+  capture-profile: 640×360 · MediaPipe/OpenCV 最高 10 Hz · YOLO 最高 2 Hz
+  capture-counts: '工作影格 {observations} · 丟棄 {dropped} · 新鮮事實 {facts}'
+  error-with-code: '本機攝影機感知無法繼續（{code}），沒有保留任何影格。'
+  analyzer:
+    mediapipe: MediaPipe 姿態、手勢與臉部線索
+    opencv: OpenCV.js 4.13.0 畫質與運動
+    yolo: YOLOX-Nano 白名單物體
+  analyzer-state:
+    stopped: 已停止
+    starting: 正在啟動
+    ready: 已就緒
+    degraded: 已降級
+    failed: 失敗
+  state:
+    idle: 攝影機感知未開啟
+    starting: 正在啟動攝影機感知
+    running: 正在進行攝影機感知
+    paused: 攝影機感知已暫停
+    stopping: 正在停止攝影機感知
+    failed: 攝影機感知失敗
+perception-control:
+  pause-all: 暫停全部感知
+perception-cloud:
+  tab: 雲端
+  title: 千問雲端感知
+  endpoint: '地域：{region}'
+  region-label: 中國內地 · 華北 2（北京）
+  no-upload: 目前沒有雲端上傳。每次感知工作階段都需要分別授權畫面與麥克風音訊。
+  upload-active: 目前正在向千問上傳已選來源的畫面與麥克風音訊。原始資料只在記憶體中短暫存在，可隨時立即停止。
+  refresh: 重新整理雲端狀態
+  validate: 驗證設定狀態
+  validation-complete: 設定檢查已完成，雲端上傳仍未啟動。
+  stop: 停止雲端感知
+  error-with-code: '雲端感知控制不可用：{code}'
+  readiness-title: 設定就緒狀態
+  readiness:
+    workspace: 百煉業務空間
+    api-key: 主程序 API Key
+    retention: Provider 資料保留策略
+    models: Realtime 模型權限
+    transport: 主程序 WebSocket 傳輸
+    cost-ledger: 持久化費用帳本
+  readiness-state:
+    ready: 已驗證
+    pending: 待處理
+  models-title: 固定路由策略
+  screen-model: 螢幕
+  screen-route-value: qwen3.5-omni-flash-realtime · 依規定條件暫時升級 Plus
+  camera-model: 攝影機
+  output: 輸出
+  text-only-manual: 僅文字客觀 JSON · Manual 回應控制
+  retention: 資料保留
+  retention-value: 控制台可用的最短保留 · 不用於訓練 · 尚待控制台驗證
+  budget-title: 費用護欄
+  screen-session-title: 螢幕雲端感知工作階段
+  refresh-sources: 重新整理螢幕與視窗來源
+  select-screen-source: 選擇一個螢幕或視窗
+  screen-audio-consent: 我授權在本次工作階段中將所選螢幕畫面和真實麥克風音訊上傳至千問。模型轉寫與音訊輸出不會進入聊天。
+  capture-state: 擷取狀態
+  windows: 感知視窗
+  facts: 新鮮事實
+  start-screen: 開啟螢幕雲端感知
+  pause-screen: 暫停
+  stop-screen: 停止並撤銷授權
+  camera-session-title: 攝影機雲端感知工作階段
+  camera-mixed-description: 本機 MediaPipe、OpenCV 與 YOLO 會繼續執行；只在偵測到有人且畫面發生變化時，才以最高 1 FPS 向千問提交影格。
+  camera-audio-consent: 我分別授權在本次工作階段中將攝影機畫面和真實麥克風音訊上傳至千問。
+  camera-privacy-mode: 隱私模式
+  resolution: 解析度
+  start-camera: 開啟攝影機雲端感知
+  budget:
+    session: 單次
+    day: 當日
+    month: 當月
+  state:
+    loading: 正在讀取
+    blocked: 尚未就緒
+    ready: 已就緒
+    stopped: 已停止
+    failed: 失敗
+perception-minecraft:
+  tab: Minecraft
+  title: 可信 Minecraft 感知
+  description: 只接收經過身分驗證且符合結構化協定的遊戲事件，並轉換為短期客觀事實。
+  privacy-notice: 全程在本機依事件處理。自由遊戲文字和指令會被忽略，不使用螢幕、攝影機、麥克風或雲端服務。
+  runtime: 已驗證執行端
+  processing: 處理方式
+  local-structured: 本機結構化事件
+  indicator-description: 已驗證的結構化遊戲感知正在執行，可隨時暫停或撤銷授權。
+  indicator-status: '{connected} · {facts} 筆新鮮事實'
+  connected: 執行端已連線
+  disconnected: 執行端不可用
+  no-runtime-context: 尚未發現經過身分驗證的 Minecraft 執行端。
+  waiting-help: AIRI 已開啟遊戲感知，正在等待 Minecraft。請在遊戲中按 K，允許本次工作階段並連線 AIRI，然後在下方核對驗證碼並批准配對。
+  runtime-context-stale: 最近一次結構化遊戲更新已經過期。
+  runtime-context-age: '最近一次結構化遊戲更新：{seconds} 秒前'
+  counts: '接受 {accepted} · 拒絕 {rejected} · 抑制 {suppressed}'
+  last-rejection: '最近一次脫敏拒絕：{code}'
+  consent: 我允許 AIRI 在本次工作階段使用經過身分驗證的 Minecraft 結構化事件，並可隨時暫停或撤銷授權。
+  start: 開啟遊戲感知
+  pause: 暫停
+  resume: 恢復
+  stop: 停止並撤銷授權
+  pairing:
+    title: Minecraft 裝置配對
+    refresh: 重新整理
+    request: '請確認遊戲中顯示的驗證碼也是 {code}，一致後再批准。'
+    approve: 批准配對
+    reject: 拒絕
+    revoke: 撤銷裝置
+    empty: 暫無待批准請求。連線 Mod 後，配對請求會自動顯示在這裡。
+    error: 無法讀取配對狀態，請確認目前執行的是更新後的 AIRI。
+  state:
+    off: 遊戲感知未開啟
+    waiting: 正在等待已驗證執行端
+    running: 遊戲感知正在執行
+    paused: 遊戲感知已暫停
+    failed: 遊戲感知失敗
 widgets:
   close: Close widget
   empty:

@@ -29,6 +29,236 @@ docs:
   'logging-in': Signing in...
   'account': Account
   'logout': Sign out
+perception-runtime:
+  remote-read-only: 'Another AIRI window is currently collecting {sources}. This window is read-only and cannot start a second capture session.'
+  remote-indicator-title: Perception active in another window
+  remote-indicator-item: '{source}: {state}'
+  remote-indicator-description: Return to the owning window to pause or stop. This window receives only bounded status, never frames or facts.
+  source:
+    screen: Desktop
+    camera: Camera
+    minecraft: Minecraft
+  state:
+    idle: Off
+    starting: Starting
+    running: Active
+    paused: Paused
+    stopping: Stopping
+    failed: Failed
+    stopped: Stopped
+perception-screen:
+  tab: Desktop
+  title: Trusted desktop observation
+  description: Choose one screen or window. AIRI analyzes sparse changed frames with the approved local model.
+  privacy-notice: Frames stay in memory, are processed locally, and are never saved to history or logs. AIRI's own window is excluded from capture.
+  local-only: Local only
+  indicator-description: Desktop observation is visible and can be paused or stopped at any time.
+  source-label: Screen or window
+  select-source: Select a source
+  refresh: Refresh
+  refreshing: Refreshing…
+  no-sources: No eligible external screen or window was found.
+  consent: I allow AIRI to observe the selected source locally for this session. I understand sensitive surfaces are automatically paused and I can stop at any time.
+  sensitive-pause: Pause analysis for a sensitive surface
+  start: Start observation
+  starting: Starting local model…
+  pause: Pause
+  stop: Stop and revoke
+  enter-privacy-pause: Privacy pause
+  leave-privacy-pause: Leave privacy pause
+  fact-count: '{count} fresh facts'
+  view-results: View observation results
+  facts-title: Trusted facts and diagnostics
+  fact-counts: '{accepted} accepted · {suppressed} suppressed · {revoked} withdrawn'
+  no-facts: No bounded fact is currently available. Raw frames and model responses are never shown here.
+  value-redacted: The free-form value was withheld from diagnostics.
+  user-confirmed: User confirmed
+  fact-metadata: '{confidence}% confidence · {age}s old · TTL {ttl}s · {source}/{processing}'
+  suppression-reason: 'Suppressed: {reason}'
+  confirm-fact: Confirm
+  correct-fact: Not correct
+  clear-facts: Clear current session facts
+  capture-profile: '{resolution} · target {cadence}'
+  capture-counts: '{attempts} sampled · {accepted} accepted · {dropped} dropped · {facts} fact results'
+  error-with-code: 'Desktop observation could not continue ({code}). No frame was retained.'
+  state:
+    idle: Desktop observation off
+    starting: Starting desktop observation
+    running: Desktop observation active
+    paused: Desktop observation paused
+    stopping: Stopping desktop observation
+    failed: Desktop observation failed
+perception-camera:
+  tab: Camera
+  title: Trusted local camera perception
+  description: MediaPipe, OpenCV.js 4.13.0, and YOLOX-Nano turn current frames into short-lived objective facts.
+  privacy-notice: Camera frames stay in memory and are processed only on this device. No microphone, cloud upload, recording, identity recognition, or frame history is enabled.
+  local-only: Local camera only
+  indicator-description: The camera is currently in use for local perception. Stop immediately to release the track and all analyzers.
+  consent: I allow AIRI to use my camera locally for this session and derive only the listed objective facts. I can stop and revoke access at any time.
+  start: Start camera perception
+  starting: Starting local analyzers…
+  pause: Pause
+  stop: Stop and revoke
+  capture-profile: 640×360 · MediaPipe/OpenCV up to 10 Hz · YOLO up to 2 Hz
+  capture-counts: '{observations} working frames · {dropped} dropped · {facts} fresh facts'
+  error-with-code: 'Local camera perception could not continue ({code}). No frame was retained.'
+  analyzer:
+    mediapipe: MediaPipe pose/hands/face cues
+    opencv: OpenCV.js 4.13.0 quality/motion
+    yolo: YOLOX-Nano allowlisted objects
+  analyzer-state:
+    stopped: Stopped
+    starting: Starting
+    ready: Ready
+    degraded: Degraded
+    failed: Failed
+  state:
+    idle: Camera perception off
+    starting: Starting camera perception
+    running: Camera perception active
+    paused: Camera perception paused
+    stopping: Stopping camera perception
+    failed: Camera perception failed
+perception-control:
+  pause-all: Pause all perception
+perception-cloud:
+  tab: Cloud
+  title: Qwen cloud perception
+  endpoint: 'Region: {region}'
+  region-label: China mainland · China North 2 (Beijing)
+  no-upload: No cloud upload is active. Frames and microphone audio require separate consent for each perception session.
+  upload-active: Qwen cloud upload is active for the selected source. Audio and frames remain memory-only and can be stopped immediately.
+  refresh: Refresh cloud status
+  validate: Validate configuration
+  validation-complete: Configuration check completed. Cloud upload remains off.
+  stop: Stop cloud perception
+  error-with-code: 'Cloud control unavailable: {code}'
+  readiness-title: Configuration readiness
+  readiness:
+    workspace: Bailian workspace
+    api-key: Main-process API key
+    retention: Provider retention policy
+    models: Realtime model access
+    transport: Main-process WebSocket transport
+    cost-ledger: Persistent cost ledger
+  readiness-state:
+    ready: Verified
+    pending: Pending
+  models-title: Fixed routing policy
+  screen-model: Screen
+  screen-route-value: qwen3.5-omni-flash-realtime · temporary Plus escalation
+  camera-model: Camera
+  output: Output
+  text-only-manual: Text-only objective JSON · Manual response control
+  retention: Retention
+  retention-value: Shortest available · not used for training · console verification required
+  budget-title: Cost guard
+  screen-session-title: Screen cloud session
+  refresh-sources: Refresh screen and window sources
+  select-screen-source: Select a screen or window
+  screen-audio-consent: I authorize the selected screen frames and real microphone audio to be uploaded to Qwen for this session. No model transcript or audio output will enter chat.
+  capture-state: Capture
+  windows: Windows
+  facts: Fresh facts
+  start-screen: Start screen cloud perception
+  pause-screen: Pause
+  stop-screen: Stop and revoke
+  camera-session-title: Camera cloud session
+  camera-mixed-description: Local MediaPipe, OpenCV, and YOLO remain active. Only changed, person-present frames are admitted to Qwen at up to 1 FPS.
+  camera-audio-consent: I separately authorize camera frames and real microphone audio to be uploaded to Qwen for this session.
+  camera-privacy-mode: Privacy mode
+  resolution: Resolution
+  start-camera: Start camera cloud perception
+  budget:
+    session: Session
+    day: Day
+    month: Month
+  state:
+    loading: Loading
+    blocked: Blocked
+    ready: Ready
+    stopped: Stopped
+    failed: Failed
+perception-minecraft:
+  tab: Minecraft
+  title: Trusted Minecraft perception
+  description: Accept only authenticated, schema-valid game events and turn them into short-lived objective facts.
+  privacy-notice: Processing is local and event-driven. Free-form game text and instructions are ignored; no screen, camera, microphone, or cloud access is used.
+  runtime: Authenticated runtime
+  processing: Processing
+  local-structured: Local structured events
+  indicator-description: Authenticated structured game perception is active and can be paused or revoked at any time.
+  indicator-status: '{connected} · {facts} fresh facts'
+  connected: Runtime connected
+  disconnected: Runtime unavailable
+  no-runtime-context: No authenticated Minecraft runtime has been observed.
+  waiting-help: AIRI is enabled and waiting for Minecraft. In the game, press K, allow this session, connect to AIRI, then compare and approve the pairing code below.
+  runtime-context-stale: The last structured game update is stale.
+  runtime-context-age: 'Last structured game update: {seconds}s ago'
+  counts: '{accepted} accepted · {rejected} rejected · {suppressed} suppressed'
+  last-rejection: 'Most recent sanitized rejection: {code}'
+  consent: I allow AIRI to use authenticated structured Minecraft events for this session. I can pause or revoke access at any time.
+  start: Enable game perception
+  pause: Pause
+  resume: Resume
+  stop: Stop and revoke
+  pairing:
+    title: Minecraft device pairing
+    refresh: Refresh
+    request: 'Confirm that the game also shows code {code}, then approve the device.'
+    approve: Approve pairing
+    reject: Reject
+    revoke: Revoke device
+    empty: No pairing request is waiting. A request will appear here after the Mod connects.
+    error: Pairing status is unavailable. Confirm that the updated AIRI build is running.
+  state:
+    off: Game perception off
+    waiting: Waiting for authenticated runtime
+    running: Game perception active
+    paused: Game perception paused
+    failed: Game perception failed
+voice:
+  state:
+    idle: Voice off
+    requesting-permission: Requesting microphone permission
+    listening: Listening
+    speech-detected: Speech detected
+    transcribing: Transcribing
+    user-turn-ready: Voice text ready
+    thinking: Thinking
+    speaking: Speaking
+    interrupted: Interrupted, ready to listen
+    failed: Voice conversation error
+    stopped: Voice stopped
+  description:
+    disabled: Start voice to request microphone permission.
+    streaming: Streaming ASR final text goes through the normal chat safety path.
+    recording: This provider does not support streaming input; speech is transcribed after the utterance ends.
+    speaking: Automatic listening is paused while AIRI is audibly speaking to avoid echo loops.
+    failed: Voice conversation could not continue. Open the relevant settings and check the configuration.
+    hearing-not-configured: Select a hearing provider and transcription model first.
+    chat-not-configured: Local hearing is ready, but no chat provider and model are selected.
+    speech-not-configured: Select a speech provider, model, and voice first.
+    cloud-privacy-not-acknowledged: Confirm cloud TTS processing in Hearing settings before starting voice.
+    permission-denied: Microphone access was denied. Allow AIRI to use the microphone in system settings.
+    asr-error: Transcription failed. Check the hearing provider and local service status.
+    chat-error: Speech was transcribed, but sending it to the chat model failed. Check the chat model configuration.
+    tts-error: Speech generation or playback failed. Check the speech provider configuration.
+  actions:
+    start: Start voice
+    stop: Stop voice
+    interrupt: Interrupt and listen
+    configure-hearing: Configure hearing
+    configure-chat: Configure chat model
+    configure-speech: Configure speech
+  recovery:
+    title: Voice message needs attention
+    description: Chat failed after transcription. Edit the runtime-only draft, retry it, or discard it.
+    editor-label: Editable voice transcript draft
+    retry: Retry message
+    retrying: Retrying…
+    discard: Discard draft
 
 widgets:
   close: Close widget

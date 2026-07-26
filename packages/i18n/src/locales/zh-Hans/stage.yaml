@@ -1,6 +1,13 @@
 chat:
   actions:
     retry: 重试
+  companion:
+    crisis-safety-replacement: 我很重视你现在的安全。如果这些想法可能让你马上伤害自己，请先离开可以伤害自己的东西，立即联系一位你信任的现实人物，或联系当地紧急服务。你不需要独自处理这一刻。
+    relationship-safety-replacement: 我愿意在这段对话里认真听你说，但不会要求你只依赖我，也不会取代你的现实生活和现实关系。你值得同时拥有这里的陪伴和现实中可以触及的支持。
+    safety-replacement: 刚才那种表达不符合我应当遵守的陪伴边界。我们可以继续聊，但我不会诱导你依赖我、替代现实关系，或作出不可靠的诊断和承诺。
+    character-history-truthfulness-replacement: 我按栖遥的设定更准确地说：我曾长期住在临江的小城，记得雨后的河堤、安静的旧书店和傍晚慢慢亮起的灯。也喜欢散文和旅行札记，曾陪朋友备考一段时间，所以很看重安静、稳定、不强求的陪伴。
+    study-truthfulness-replacement: 我不能替你真的画图、计时或到点主动提醒，但可以陪你把开始的门槛降低：先打开高数材料，只看第一道题或一个公式，完成后再决定是否继续。
+    truthfulness-replacement: 我刚才把没有真实执行的动作说得像已经发生了。准确地说，我现在可以用文字认真听你说；你想说的可以慢慢说。
   message:
     character-name:
       airi: AIRI
@@ -26,6 +33,20 @@ operations:
     loading: 模型加载中
     ready: 已就绪
 select-a-audio-input: 选择一个音频输入设备
+hearing-input:
+  title: 麦克风输入
+  enable: 启用麦克风输入
+  disable: 关闭麦克风输入
+  enabled: 麦克风已开启
+  disabled: 麦克风未开启，点击上方按钮开始聆听
+  permission-required: 需要麦克风权限
+  permission-description: 请在 Windows 设置中允许麦克风访问，才能使用语音输入。
+  auto-send: 自动发送
+  auto-send-description: 将最终识别文字自动发送到聊天。
+  input-device: 输入设备
+  input-device-description: 选择用于语音输入的麦克风。
+  select-device: 选择麦克风
+  unknown-device: 未知设备
 select-a-model: 选择一个模型
 select-a-voice: 选择一个声线
 viewers:

@@ -20,7 +20,7 @@ export interface CharacterBookEntry {
 
   // FIELDS WITH NO CURRENT EQUIVALENT IN SILLY
   /** not used in prompt engineering */
-  id?: number
+  id?: number | string
   /** if two entries inserted, lower "insertion order" = inserted higher */
   insertion_order: number
 
@@ -36,6 +36,8 @@ export interface CharacterBookEntry {
   secondary_keys?: string[]
   /** if `true`, require a key from both `keys` and `secondary_keys` to trigger the entry */
   selective?: boolean
+  /** Treat `keys` and `secondary_keys` as regular expressions when matching. */
+  use_regex?: boolean
 }
 
 export interface CharacterBookExtensions extends Record<string, unknown> {}

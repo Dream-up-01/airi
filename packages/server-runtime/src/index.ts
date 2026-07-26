@@ -17,7 +17,7 @@ import type {
 import type { AuthenticatedPeer, Peer, RegisteredExtensionModule } from './types'
 
 import { Buffer } from 'node:buffer'
-import { timingSafeEqual } from 'node:crypto'
+import { createHash, createPublicKey, randomBytes, timingSafeEqual, verify } from 'node:crypto'
 
 import { availableLogLevelStrings, Format, LogLevelString, logLevelStringToLogLevelMap, useLogg } from '@guiiai/logg'
 import { errorMessageFrom } from '@moeru/std'
@@ -128,6 +128,60 @@ function timingSafeCompare(a: string, b: string): boolean {
   )
 }
 
+const MODULE_PAIRING_PROTOCOL_VERSION = 1
+const MODULE_PAIRING_CHALLENGE_TTL_MS = 120_000
+const MODULE_PAIRING_MAX_TEXT_LENGTH = 80
+
+interface PendingModulePairingChallenge extends ModulePairingIdentity {
+  moduleInstanceId: string
+  requestId: string
+  nonce: string
+  verificationCode: string
+  expiresAt: number
+  requiresApproval: boolean
+}
+
+function pairingProofPayload(challenge: Pick<PendingModulePairingChallenge, 'moduleInstanceId' | 'requestId' | 'deviceId' | 'nonce'>): Buffer {
+  return Buffer.from(`airi-module-pairing-v1\n${MODULE_PAIRING_PROTOCOL_VERSION}\n${challenge.moduleInstanceId}\n${challenge.requestId}\n${challenge.deviceId}\n${challenge.nonce}`, 'utf8')
+}
+
+function validPairingText(value: unknown, maxLength = MODULE_PAIRING_MAX_TEXT_LENGTH): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= maxLength
+}
+
+function validPairingPublicKey(value: unknown): value is string {
+  if (!validPairingText(value, 256) || !/^[a-z0-9+/]+={0,2}$/i.test(value))
+    return false
+  try {
+    const bytes = Buffer.from(value, 'base64')
+    return bytes.length >= 40 && bytes.length <= 64
+  }
+  catch {
+    return false
+  }
+}
+
+function modulePairingVerificationCode(nonce: string, publicKey: string): string {
+  const digest = createHash('sha256').update(`${nonce}:${publicKey}`, 'utf8').digest()
+  return String(digest.readUInt32BE(0) % 1_000_000).padStart(6, '0')
+}
+
+function verifyModulePairingProof(challenge: PendingModulePairingChallenge, signature: unknown): boolean {
+  if (!validPairingText(signature, 256))
+    return false
+  try {
+    const key = createPublicKey({
+      key: Buffer.from(challenge.publicKey, 'base64'),
+      format: 'der',
+      type: 'spki',
+    })
+    return verify(null, pairingProofPayload(challenge), key, Buffer.from(signature, 'base64'))
+  }
+  catch {
+    return false
+  }
+}
+
 /**
  * Sends an event to a specific peer.
  * Converts the event to JSON format before transmission.
@@ -141,6 +195,7 @@ export interface AppOptions {
   instanceId?: string
   auth?: {
     token: string
+    modulePairing?: ModulePairingProvider
   }
   logger?: {
     app?: { level?: LogLevelString, format?: Format }
@@ -155,6 +210,27 @@ export interface AppOptions {
     readTimeout?: number
     message?: MessageHeartbeat | string
   }
+}
+
+export interface ModulePairingIdentity {
+  deviceId: string
+  publicKey: string
+  displayName: string
+  clientVersion: string
+}
+
+export interface ModulePairingApprovalRequest extends ModulePairingIdentity {
+  requestId: string
+  verificationCode: string
+  expiresAt: number
+}
+
+export interface ModulePairingProvider {
+  isPaired: (identity: ModulePairingIdentity) => boolean | Promise<boolean>
+  requestApproval: (request: ModulePairingApprovalRequest) => boolean | Promise<boolean>
+  remember: (identity: ModulePairingIdentity) => void | Promise<void>
+  cancelApproval?: (requestId: string) => void
+  subscribeRevocations?: (listener: (deviceId: string) => void) => () => void
 }
 
 /**
@@ -216,6 +292,7 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
   // === Configuration & State Initialization ===
   const instanceId = options?.instanceId || optionOrEnv(undefined, 'SERVER_INSTANCE_ID', nanoid())
   const authToken = optionOrEnv(options?.auth?.token, 'AUTHENTICATION_TOKEN', '')
+  const modulePairing = options?.auth?.modulePairing
 
   const { appLogLevel, appLogFormat, websocketLogLevel, websocketLogFormat } = normalizeLoggerConfig(options)
 
@@ -233,6 +310,8 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
   const peers = new Map<string, AuthenticatedPeer>()
   const peersByModule = new Map<string, Map<number | string | undefined, AuthenticatedPeer>>()
   const consumers = createConsumerOrchestrator()
+  const pendingModulePairings = new Map<string, PendingModulePairingChallenge>()
+  const pendingModulePairingApprovals = new Map<string, string>()
   const heartbeatTtlMs = options?.heartbeat?.readTimeout ?? serverWsDefaultHeartbeatTtlMs
   const heartbeatMessage = options?.heartbeat?.message ?? MessageHeartbeat.Pong
   const RESPONSES = createResponses(instanceId)
@@ -529,6 +608,15 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
       timeout: heartbeatTtlMs,
     },
   })
+  const unsubscribeModulePairingRevocations = modulePairing?.subscribeRevocations?.((deviceId) => {
+    for (const peerInfo of peers.values()) {
+      if (peerInfo.pairingDeviceId === deviceId) {
+        unregisterModulePeer(peerInfo, 'pairing-revoked')
+        removeFailedPeer(peerInfo, 'pairing-revoked')
+        peerInfo.peer.close?.()
+      }
+    }
+  })
   wsServer.onPeerOpen(({ peer: wsPeer }) => {
     const peer = rawPeerFrom(wsPeer)
     if (!peer)
@@ -626,14 +714,133 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
           return
         }
 
-        send(peer, RESPONSES.authenticated(event.metadata?.event.id))
         const p = peers.get(peer.id)
         if (p) {
           p.authenticated = true
         }
 
+        send(peer, RESPONSES.authenticated(event.metadata?.event.id))
         sendRegistrySync(peer, event.metadata?.event.id)
 
+        return
+      }
+
+      case 'module:pairing:hello': {
+        if (!modulePairing) {
+          send(peer, RESPONSES.error(ServerErrorMessages.pairingUnavailable, event.metadata?.event.id))
+          return
+        }
+
+        const data = event.data
+        if (data.protocolVersion !== MODULE_PAIRING_PROTOCOL_VERSION
+          || data.algorithm !== 'Ed25519'
+          || !validPairingText(event.metadata?.source?.id)
+          || data.moduleInstanceId !== event.metadata.source.id
+          || !validPairingText(data.deviceId)
+          || !validPairingPublicKey(data.publicKey)
+          || !validPairingText(data.displayName)
+          || !validPairingText(data.clientVersion)) {
+          send(peer, RESPONSES.error(ServerErrorMessages.pairingInvalidRequest, event.metadata?.event.id))
+          return
+        }
+
+        const identity: ModulePairingIdentity = {
+          deviceId: data.deviceId,
+          publicKey: data.publicKey,
+          displayName: data.displayName,
+          clientVersion: data.clientVersion,
+        }
+
+        // The channel may optimistically mark anonymous peers authenticated when
+        // no global token is configured. A pairing hello opts this connection into
+        // the stricter device-authenticated path before any module can announce.
+        authenticatedPeer.authenticated = false
+
+        void Promise.resolve(modulePairing.isPaired(identity)).then((paired) => {
+          if (peers.get(peer.id) !== authenticatedPeer)
+            return
+
+          const nonce = randomBytes(32).toString('base64')
+          const requestId = randomBytes(16).toString('hex')
+          const challenge: PendingModulePairingChallenge = {
+            ...identity,
+            moduleInstanceId: event.metadata!.source!.id,
+            requestId,
+            nonce,
+            verificationCode: modulePairingVerificationCode(nonce, identity.publicKey),
+            expiresAt: Date.now() + MODULE_PAIRING_CHALLENGE_TTL_MS,
+            requiresApproval: !paired,
+          }
+          pendingModulePairings.set(peer.id, challenge)
+          send(peer, {
+            type: 'module:pairing:challenge',
+            data: {
+              protocolVersion: MODULE_PAIRING_PROTOCOL_VERSION,
+              moduleInstanceId: challenge.moduleInstanceId,
+              requestId: challenge.requestId,
+              nonce: challenge.nonce,
+              verificationCode: challenge.verificationCode,
+              expiresAt: challenge.expiresAt,
+              requiresApproval: challenge.requiresApproval,
+            },
+            metadata: createEventMetadata(instanceId, event.metadata?.event.id),
+          })
+        }).catch(() => send(peer, RESPONSES.error(ServerErrorMessages.pairingServiceFailed, event.metadata?.event.id)))
+        return
+      }
+
+      case 'module:pairing:prove': {
+        if (!modulePairing) {
+          send(peer, RESPONSES.error(ServerErrorMessages.pairingUnavailable, event.metadata?.event.id))
+          return
+        }
+
+        const challenge = pendingModulePairings.get(peer.id)
+        pendingModulePairings.delete(peer.id)
+        if (!challenge
+          || challenge.expiresAt <= Date.now()
+          || event.data.protocolVersion !== MODULE_PAIRING_PROTOCOL_VERSION
+          || event.data.moduleInstanceId !== challenge.moduleInstanceId
+          || event.metadata?.source?.id !== challenge.moduleInstanceId
+          || event.data.requestId !== challenge.requestId
+          || event.data.deviceId !== challenge.deviceId
+          || event.data.publicKey !== challenge.publicKey
+          || !verifyModulePairingProof(challenge, event.data.signature)) {
+          send(peer, RESPONSES.error(ServerErrorMessages.pairingProofInvalid, event.metadata?.event.id))
+          return
+        }
+
+        pendingModulePairingApprovals.set(peer.id, challenge.requestId)
+        void (async () => {
+          const identity: ModulePairingIdentity = {
+            deviceId: challenge.deviceId,
+            publicKey: challenge.publicKey,
+            displayName: challenge.displayName,
+            clientVersion: challenge.clientVersion,
+          }
+          const approved = !challenge.requiresApproval || await modulePairing.requestApproval({
+            ...identity,
+            requestId: challenge.requestId,
+            verificationCode: challenge.verificationCode,
+            expiresAt: challenge.expiresAt,
+          })
+          const currentPeer = peers.get(peer.id)
+          if (!approved || !currentPeer || currentPeer !== authenticatedPeer) {
+            if (currentPeer)
+              send(peer, RESPONSES.error(ServerErrorMessages.pairingDenied, event.metadata?.event.id))
+            return
+          }
+
+          if (challenge.requiresApproval)
+            await modulePairing.remember(identity)
+
+          currentPeer.authenticated = true
+          currentPeer.pairingDeviceId = challenge.deviceId
+          send(peer, RESPONSES.authenticated(event.metadata?.event.id))
+          sendRegistrySync(peer, event.metadata?.event.id)
+        })().catch(() => send(peer, RESPONSES.error(ServerErrorMessages.pairingServiceFailed, event.metadata?.event.id))).finally(() => {
+          pendingModulePairingApprovals.delete(peer.id)
+        })
         return
       }
 
@@ -647,7 +854,6 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
         }
 
         const authenticatedPeerId = event.data.peerId ?? peer.id
-        send(peer, RESPONSES.peerAuthenticated(authenticatedPeerId, event.metadata?.event.id))
         const p = peers.get(peer.id)
         if (p) {
           p.authenticated = true
@@ -656,6 +862,7 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
           p.peerIds.add(authenticatedPeerId)
         }
 
+        send(peer, RESPONSES.peerAuthenticated(authenticatedPeerId, event.metadata?.event.id))
         sendRegistrySync(peer, event.metadata?.event.id)
 
         return
@@ -972,6 +1179,12 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
   }
 
   function handlePeerClose(peer: Peer, details?: WsCloseDetails) {
+    pendingModulePairings.delete(peer.id)
+    const approvalRequestId = pendingModulePairingApprovals.get(peer.id)
+    if (approvalRequestId) {
+      pendingModulePairingApprovals.delete(peer.id)
+      modulePairing?.cancelApproval?.(approvalRequestId)
+    }
     const p = peers.get(peer.id)
     const now = Date.now()
     const peerName = p?.name
@@ -1162,6 +1375,7 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
     clearHealthCheckInterval()
     closeAllPeers()
     wsServer.close()
+    unsubscribeModulePairingRevocations?.()
     resetRoutingState(true)
   }
 

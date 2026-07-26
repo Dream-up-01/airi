@@ -10,6 +10,11 @@ export const TTS_FLUSH_INSTRUCTION = '\u200B'
 export const TTS_SPECIAL_TOKEN = '\u2063'
 
 const regexpAnySingleDigit = /\d/
+const regexpAsciiAlphanumeric = /^[A-Z0-9]$/i
+const regexpTrailingAsciiToken = /[A-Z][A-Z.]*$/i
+const regexpUrlScheme = /^(?:https?|wss?|ftp)$/i
+const regexpUrlFragment = /^(?:(?:https?|wss?|ftp):\/\/|www\.)\S*$/i
+const commonPeriodAbbreviations = new Set(['dr', 'mr', 'mrs', 'ms', 'prof', 'sr', 'jr', 'st', 'vs', 'etc', 'e.g', 'i.e'])
 
 const keptPunctuations = new Set('?？!！')
 const hardPunctuations = new Set('.。?？!！…⋯～~\n\t\r')
@@ -33,6 +38,27 @@ export interface TtsChunkItem {
   chunk: string
   special: string | null
   reason: 'boost' | 'limit' | 'hard' | 'flush' | 'special'
+}
+
+function isAsciiAlphanumericGrapheme(value: string | undefined): boolean {
+  return value != null && regexpAsciiAlphanumeric.test(value)
+}
+
+function currentToken(buffer: string): string {
+  return buffer.match(/[^\s"'“”‘’<>()[\]{}（）【】]*$/u)?.[0] ?? ''
+}
+
+function isUrlSchemeToken(buffer: string): boolean {
+  return regexpUrlScheme.test(currentToken(buffer))
+}
+
+function isUrlFragmentToken(buffer: string): boolean {
+  return regexpUrlFragment.test(currentToken(buffer))
+}
+
+function isCommonPeriodAbbreviation(buffer: string): boolean {
+  const token = buffer.match(regexpTrailingAsciiToken)?.[0].toLowerCase()
+  return token != null && commonPeriodAbbreviations.has(token)
 }
 
 export async function* chunkTtsInput(
@@ -87,8 +113,8 @@ export async function* chunkTtsInput(
       switch (value) {
         case '.':
         case ',': {
+          next = await iterator.next()
           if (previousValue !== undefined && regexpAnySingleDigit.test(previousValue)) {
-            next = await iterator.next()
             if (!next.done && next.value && regexpAnySingleDigit.test(next.value)) {
               buffer += value
               current = next
@@ -96,16 +122,62 @@ export async function* chunkTtsInput(
               continue
             }
           }
-          else if (value === '.') {
-            next = await iterator.next()
-            if (!next.done && next.value && next.value === '.') {
-              afterNext = await iterator.next()
-              if (!afterNext.done && afterNext.value && afterNext.value === '.') {
-                value = '…'
-                next = undefined
-                afterNext = undefined
-              }
+
+          if (value === '.' && isAsciiAlphanumericGrapheme(previousValue) && isAsciiAlphanumericGrapheme(next.done ? undefined : next.value)) {
+            buffer += value
+            current = next
+            next = undefined
+            continue
+          }
+
+          if (value === '.' && isCommonPeriodAbbreviation(buffer)) {
+            buffer += value
+            current = next
+            next = undefined
+            continue
+          }
+
+          if (value === ',' && isUrlFragmentToken(buffer)) {
+            buffer += value
+            current = next
+            next = undefined
+            continue
+          }
+
+          if (value === '.' && !next.done && next.value && next.value === '.') {
+            afterNext = await iterator.next()
+            if (!afterNext.done && afterNext.value && afterNext.value === '.') {
+              value = '…'
+              next = undefined
+              afterNext = undefined
             }
+            else {
+              buffer += '..'
+              current = afterNext
+              next = undefined
+              afterNext = undefined
+              continue
+            }
+          }
+          break
+        }
+        case ':': {
+          next = await iterator.next()
+          if (!next.done && next.value === '/' && isUrlSchemeToken(buffer)) {
+            buffer += value
+            current = next
+            next = undefined
+            continue
+          }
+          break
+        }
+        case '?':
+        case '!':
+        case ';': {
+          if (isUrlFragmentToken(buffer)) {
+            buffer += value
+            current = await iterator.next()
+            continue
           }
         }
       }
@@ -140,12 +212,14 @@ export async function* chunkTtsInput(
         chunkWordsCount = 0
       }
 
-      chunk += buffer + value
+      chunk += buffer
+      if (!flush && !special)
+        chunk += value
       chunkWordsCount += words.length
       buffer = ''
 
       if (special) {
-        const text = chunk.slice(0, -1).trim()
+        const text = chunk.trim()
         yield {
           text,
           words: chunkWordsCount,
@@ -191,9 +265,6 @@ export async function* chunkTtsInput(
     current = next
   }
 
-  // TODO: remove later
-  // eslint-disable-next-line no-console
-  console.debug('while loop ends, chunk/buffer:', chunk, buffer)
   if (chunk.length > 0 || buffer.length > 0) {
     const text = (chunk + buffer).trim()
     yield {

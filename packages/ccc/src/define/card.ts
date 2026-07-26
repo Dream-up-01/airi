@@ -32,6 +32,14 @@ interface CardMeta {
 
 interface CardAdditional {
   /**
+   * Standard Character Card V3 lorebook attached to this character.
+   *
+   * This field intentionally lives on the neutral card model instead of an
+   * AIRI-specific extension so CCv3 import and export can round-trip it
+   * without changing ownership or semantics.
+   */
+  characterBook?: Data['character_book']
+  /**
    * Extensions.
    * - extensions
    */

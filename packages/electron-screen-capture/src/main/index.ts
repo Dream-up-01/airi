@@ -3,13 +3,13 @@
 
 import type { Format, LogLevelString } from '@guiiai/logg'
 import type { MutexInterface } from 'async-mutex'
-import type { BrowserWindow, DesktopCapturerSource, SourcesOptions } from 'electron'
+import type { DesktopCapturerSource, SourcesOptions } from 'electron'
 
 import { useLogg } from '@guiiai/logg'
 import { defineInvokeHandler } from '@moeru/eventa'
 import { createContext } from '@moeru/eventa/adapters/electron/main'
 import { Mutex, withTimeout } from 'async-mutex'
-import { app, desktopCapturer, ipcMain, session as sessionModule } from 'electron'
+import { app, BrowserWindow, desktopCapturer, ipcMain, session as sessionModule } from 'electron'
 import { nanoid } from 'nanoid'
 
 import { screenCapture } from '..'
@@ -93,6 +93,7 @@ export interface GetLoopbackAudioMediaStreamOptions {
 
 let setSourceMutex: MutexInterface
 let screenCaptureSourceMutexHandle: string | undefined
+let screenCaptureSourceMutexWindowId: number | undefined
 let setSourceMutexTimeoutHandle: NodeJS.Timeout | undefined
 
 export function initScreenCaptureForMain(options: InitMainOptions = {}): void {
@@ -142,6 +143,16 @@ function resetScreenCaptureSource() {
   clearTimeout(setSourceMutexTimeoutHandle)
   setSourceMutexTimeoutHandle = undefined
   screenCaptureSourceMutexHandle = undefined
+  screenCaptureSourceMutexWindowId = undefined
+}
+
+function releaseScreenCaptureSource(mutexHandle?: string): boolean {
+  if (!screenCaptureSourceMutexHandle || (mutexHandle && screenCaptureSourceMutexHandle !== mutexHandle))
+    return false
+
+  resetScreenCaptureSource()
+  setSourceMutex.release()
+  return true
 }
 
 const initializedWindows = new WeakSet<BrowserWindow>()
@@ -187,6 +198,17 @@ export function initScreenCaptureForWindow(window: BrowserWindow, options?: Init
   const { context } = createContext(ipcMain, window, { onlySameWindow: true })
   const session = sessionModule.defaultSession
 
+  window.once('closed', () => {
+    if (screenCaptureSourceMutexWindowId !== windowId)
+      return
+
+    if (releaseScreenCaptureSource()) {
+      log
+        .withFields({ windowId, windowTitle: tryWindowTitle(window, windowTitle) })
+        .debug('setSourceMutex released because the owning window closed')
+    }
+  })
+
   defineInvokeHandler(context, screenCapture.checkMacOSPermission, async () => checkMacOSScreenCapturePermission())
   defineInvokeHandler(context, screenCapture.requestMacOSPermission, async () => requestMacOSScreenCapturePermission())
 
@@ -197,7 +219,12 @@ export function initScreenCaptureForWindow(window: BrowserWindow, options?: Init
     // REVIEW(@sumimakito): This has nothing to do with out side, probably related to Electron Bug, you can
     // read more here https://github.com/electron/electron/issues/44504
     const sources = await desktopCapturer.getSources(sourcesOptions)
-    return sources.map(source => toSerializableDesktopCapturerSource(source))
+    const ownedMediaSourceIds = new Set(
+      BrowserWindow.getAllWindows()
+        .filter(candidate => !candidate.isDestroyed())
+        .map(candidate => candidate.getMediaSourceId()),
+    )
+    return sources.map(source => toSerializableDesktopCapturerSource(source, ownedMediaSourceIds.has(source.id)))
   })
 
   defineInvokeHandler(context, screenCapture.setSource, async (request, eventaOptions) => {
@@ -213,10 +240,16 @@ export function initScreenCaptureForWindow(window: BrowserWindow, options?: Init
     await setSourceMutex.acquire()
     log.withFields({ windowId, windowTitle: tryWindowTitle(window, windowTitle) }).debug('setSourceMutex acquired')
 
+    if (window.isDestroyed()) {
+      setSourceMutex.release()
+      throw new Error('Cannot select a screen capture source for a destroyed window')
+    }
+
     clearTimeout(setSourceMutexTimeoutHandle)
     const handle = nanoid()
     setSourceMutexTimeoutHandle = undefined
     screenCaptureSourceMutexHandle = handle
+    screenCaptureSourceMutexWindowId = windowId
 
     try {
       session.setDisplayMediaRequestHandler(async (_request, callback) => {
@@ -236,14 +269,13 @@ export function initScreenCaptureForWindow(window: BrowserWindow, options?: Init
         if (screenCaptureSourceMutexHandle !== handle)
           return
 
-        resetScreenCaptureSource()
-        setSourceMutex.release()
+        releaseScreenCaptureSource(handle)
 
         log
           .withFields({ windowId, windowTitle: tryWindowTitle(window, windowTitle) })
           .warn(
-            `setSourceMutex released for window due to timeout. `
-            + 'Please make sure to invoke screenCaptureResetSource when getDisplayMedia is completed.',
+            'Screen capture source selection exceeded its safety timeout; '
+            + 'the temporary request handler and mutex were released.',
           )
       }, timeout ?? 5000)
 
@@ -255,18 +287,14 @@ export function initScreenCaptureForWindow(window: BrowserWindow, options?: Init
         .withError(e)
         .error('screenCaptureSetSourceEx failed for window')
 
-      resetScreenCaptureSource()
-      setSourceMutex.release()
+      releaseScreenCaptureSource(handle)
       throw e
     }
   })
 
   defineInvokeHandler(context, screenCapture.resetSource, async (mutexHandle) => {
-    if (screenCaptureSourceMutexHandle !== mutexHandle)
+    if (!releaseScreenCaptureSource(mutexHandle))
       return
-
-    resetScreenCaptureSource()
-    setSourceMutex.release()
 
     log.withFields({ windowId, windowTitle: tryWindowTitle(window, windowTitle) }).debug('setSourceMutex released by window')
   })

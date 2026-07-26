@@ -618,6 +618,13 @@ pages:
       enable-description: >-
         Include Minecraft self-knowledge in Stage chat turns and keep passive runtime visibility enabled.
       configured: 我的世界已正確設定！
+      perception:
+        title: 可信遊戲感知
+        description: 只接收已認證且通過嚴格結構驗證的 Minecraft 狀態事件。自由文字、命令、重複事件和過期事件不會進入聊天上下文。
+        enable: 允許本次工作階段感知
+        disable: 停止並撤銷授權
+        counts: '已接受：{accepted} · 已拒絕：{rejected} · 已抑制：{suppressed}'
+        last-rejection: '最近的安全拒絕碼：{code}'
       read-only:
         title: Read-only shell
         description: >-
@@ -632,16 +639,21 @@ pages:
         latest-context: Latest bot context
         waiting: Waiting for a fresh bot-originated context push.
         unknown: Unknown
+        safe-only: 執行資訊只包含受控事實代碼；原始遊戲文字和完整負載不會被保留。
       debug:
         title: Minecraft traffic
         empty: No Minecraft traffic observed yet.
         source: 'Source: {source}'
+        outcome: '結果：{outcome}'
       status:
         service-online: Service online
         service-offline: Service offline
         no-runtime-context: No bot context observed yet
         last-context-seconds: 'Last bot context: {seconds}s ago'
         last-context-stale: 'Last bot context: Stale'
+    perception:
+      title: 可信感知
+      description: 管理螢幕與攝影機的明確授權、本機處理、目前分析器、新鮮事實、暫停和停止。
     hearing:
       description: 語音辨識
       title: 聽覺

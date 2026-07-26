@@ -156,6 +156,9 @@ describe('client', () => {
       autoReconnect: false,
       connector,
       name: 'test-plugin',
+      permissions: {
+        capabilities: [{ key: 'perception.minecraft.structured', actions: ['snapshot'] }],
+      },
       token: 'secret',
     })
 
@@ -177,7 +180,12 @@ describe('client', () => {
     expect(client.connectionStatus).toBe('announcing')
     expect(announceEvent).toMatchObject({
       type: 'extension:module:announce',
-      data: { name: 'test-plugin' },
+      data: {
+        name: 'test-plugin',
+        permissions: {
+          capabilities: [{ key: 'perception.minecraft.structured', actions: ['snapshot'] }],
+        },
+      },
     })
 
     connector.emit(serverEvent('extension:module:announced', {

@@ -18,11 +18,12 @@ import { isMacOS } from 'std-env'
  * @param source - The DesktopCapturerSource to serialize
  * @returns A serializable representation of the DesktopCapturerSource
  */
-export function toSerializableDesktopCapturerSource(source: DesktopCapturerSource): SerializableDesktopCapturerSource {
+export function toSerializableDesktopCapturerSource(source: DesktopCapturerSource, ownedByCurrentApp = false): SerializableDesktopCapturerSource {
   return {
     id: source.id,
     name: source.name,
     display_id: source.display_id,
+    ownedByCurrentApp,
     appIcon: source.appIcon != null && !source.appIcon.isEmpty() ? new Uint8Array(source.appIcon.toPNG().buffer) : undefined,
     thumbnail: source.thumbnail != null ? new Uint8Array(source.thumbnail.toJPEG(90).buffer) : undefined,
   }

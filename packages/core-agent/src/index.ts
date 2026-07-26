@@ -12,6 +12,8 @@ export type { ContextSnapshot } from './messages/context-prompt'
 export { formatTimePrefix } from './messages/datetime-prefix'
 export { createChatHooks } from './runtime/agent-hooks'
 export type {
+  AssistantOutputPolicyDecision,
+  AssistantOutputReleaseMode,
   ChatOrchestratorLifecycleRecord,
   ChatOrchestratorLLMPort,
   ChatOrchestratorPromptProjection,
@@ -21,9 +23,11 @@ export type {
   ChatOrchestratorSendOptions,
   ChatOrchestratorSessionPort,
   QueuedSendSnapshot,
+  SystemPromptSupplement,
+  SystemPromptSupplementInput,
 } from './runtime/chat-orchestrator-runtime'
 export { createChatOrchestratorRuntime } from './runtime/chat-orchestrator-runtime'
-export type { ContextHistoryEntry, ContextIngestResult, ContextRegistry } from './runtime/context-registry'
+export type { ContextHistoryEntry, ContextIngestResult, ContextRegistry, ContextRetractResult } from './runtime/context-registry'
 export { createContextRegistry } from './runtime/context-registry'
 export { useLlmmarkerParser } from './runtime/llm-marker-parser'
 export {

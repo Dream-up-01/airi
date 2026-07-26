@@ -29,6 +29,236 @@ docs:
   'logging-in': 登录中...
   'account': 账号
   'logout': 退出登录
+perception-runtime:
+  remote-read-only: '另一个 AIRI 窗口正在采集{sources}。本窗口为只读状态，不能再启动第二个采集会话。'
+  remote-indicator-title: 感知正在另一个窗口运行
+  remote-indicator-item: '{source}：{state}'
+  remote-indicator-description: 请回到拥有采集权的窗口暂停或停止；本窗口只接收有界状态，不接收帧或事实。
+  source:
+    screen: 桌面
+    camera: 摄像头
+    minecraft: Minecraft
+  state:
+    idle: 未开启
+    starting: 正在启动
+    running: 正在采集
+    paused: 已暂停
+    stopping: 正在停止
+    failed: 失败
+    stopped: 已停止
+perception-screen:
+  tab: 桌面
+  title: 可信桌面观察
+  description: 选择一个屏幕或窗口。AIRI 只用已批准的本地模型分析稀疏的变化帧。
+  privacy-notice: 帧只在内存中存在并仅在本机处理，不保存到历史或日志；AIRI 自身窗口会从捕获中排除。
+  local-only: 仅本地
+  indicator-description: 桌面观察始终可见，你可以随时暂停或停止。
+  source-label: 屏幕或窗口
+  select-source: 选择来源
+  refresh: 刷新
+  refreshing: 正在刷新…
+  no-sources: 没有找到可用的外部屏幕或窗口。
+  consent: 我允许 AIRI 在本次会话中仅在本机观察所选来源；我知道敏感页面会自动暂停，并可随时停止。
+  sensitive-pause: 遇到敏感页面时暂停分析
+  start: 开始观察
+  starting: 正在启动本地模型…
+  pause: 暂停
+  stop: 停止并撤销授权
+  enter-privacy-pause: 隐私暂停
+  leave-privacy-pause: 结束隐私暂停
+  fact-count: '{count} 条新鲜事实'
+  view-results: 查看观察结果
+  facts-title: 可信事实与诊断
+  fact-counts: '接受 {accepted} · 抑制 {suppressed} · 撤回 {revoked}'
+  no-facts: 当前没有可用的有界事实；这里不会显示原始帧或模型完整响应。
+  value-redacted: 自由文本值已从诊断中隐藏。
+  user-confirmed: 用户已确认
+  fact-metadata: '置信度 {confidence}% · {age} 秒前 · TTL {ttl} 秒 · {source}/{processing}'
+  suppression-reason: '抑制原因：{reason}'
+  confirm-fact: 确认准确
+  correct-fact: 并非如此
+  clear-facts: 清除本次会话事实
+  capture-profile: '{resolution} · 目标 {cadence}'
+  capture-counts: '采样 {attempts} · 接受 {accepted} · 丢弃 {dropped} · 事实结果 {facts}'
+  error-with-code: '桌面观察无法继续（{code}），没有保留任何帧。'
+  state:
+    idle: 桌面观察未开启
+    starting: 正在启动桌面观察
+    running: 正在观察桌面
+    paused: 桌面观察已暂停
+    stopping: 正在停止桌面观察
+    failed: 桌面观察失败
+perception-camera:
+  tab: 摄像头
+  title: 可信本地摄像头感知
+  description: MediaPipe、OpenCV.js 4.13.0 与 YOLOX-Nano 只把当前帧转换为短期客观事实。
+  privacy-notice: 摄像头帧只在内存中存在并仅在本机处理；不启用麦克风、云上传、录制、身份识别或帧历史。
+  local-only: 仅本地摄像头
+  indicator-description: 摄像头当前正用于本地感知；停止后会立即释放视频轨道和全部分析器。
+  consent: 我允许 AIRI 在本次会话中仅在本机使用摄像头，并只生成列出的客观事实；我可以随时停止并撤销授权。
+  start: 开始摄像头感知
+  starting: 正在启动本地分析器…
+  pause: 暂停
+  stop: 停止并撤销授权
+  capture-profile: 640×360 · MediaPipe/OpenCV 最高 10 Hz · YOLO 最高 2 Hz
+  capture-counts: '工作帧 {observations} · 丢弃 {dropped} · 新鲜事实 {facts}'
+  error-with-code: '本地摄像头感知无法继续（{code}），没有保留任何帧。'
+  analyzer:
+    mediapipe: MediaPipe 姿态、手势与面部线索
+    opencv: OpenCV.js 4.13.0 画质与运动
+    yolo: YOLOX-Nano 白名单物体
+  analyzer-state:
+    stopped: 已停止
+    starting: 正在启动
+    ready: 已就绪
+    degraded: 已降级
+    failed: 失败
+  state:
+    idle: 摄像头感知未开启
+    starting: 正在启动摄像头感知
+    running: 正在进行摄像头感知
+    paused: 摄像头感知已暂停
+    stopping: 正在停止摄像头感知
+    failed: 摄像头感知失败
+perception-control:
+  pause-all: 暂停全部感知
+perception-cloud:
+  tab: 云端
+  title: 千问云感知
+  endpoint: '地域：{region}'
+  region-label: 中国内地 · 华北 2（北京）
+  no-upload: 当前没有云端上传。每次感知会话都需要分别授权画面与麦克风音频。
+  upload-active: 当前正在向千问上传已选择来源的画面与麦克风音频。原始数据仅在内存中短暂存在，可随时立即停止。
+  refresh: 刷新云端状态
+  validate: 验证配置状态
+  validation-complete: 配置检查已完成，云端上传仍未启动。
+  stop: 停止云感知
+  error-with-code: '云感知控制不可用：{code}'
+  readiness-title: 配置就绪状态
+  readiness:
+    workspace: 百炼业务空间
+    api-key: 主进程 API Key
+    retention: Provider 数据保留策略
+    models: Realtime 模型权限
+    transport: 主进程 WebSocket 传输
+    cost-ledger: 持久化费用账本
+  readiness-state:
+    ready: 已验证
+    pending: 待处理
+  models-title: 固定路由策略
+  screen-model: 屏幕
+  screen-route-value: qwen3.5-omni-flash-realtime · 按规定条件临时升级 Plus
+  camera-model: 摄像头
+  output: 输出
+  text-only-manual: 仅文本客观 JSON · Manual 响应控制
+  retention: 数据保留
+  retention-value: 控制台可用的最短保留 · 不用于训练 · 尚待控制台验证
+  budget-title: 费用护栏
+  screen-session-title: 屏幕云感知会话
+  refresh-sources: 刷新屏幕与窗口来源
+  select-screen-source: 选择一个屏幕或窗口
+  screen-audio-consent: 我授权在本次会话中将所选屏幕画面和真实麦克风音频上传至千问。模型转写与音频输出不会进入聊天。
+  capture-state: 采集状态
+  windows: 感知窗口
+  facts: 新鲜事实
+  start-screen: 开启屏幕云感知
+  pause-screen: 暂停
+  stop-screen: 停止并撤销授权
+  camera-session-title: 摄像头云感知会话
+  camera-mixed-description: 本地 MediaPipe、OpenCV 与 YOLO 会继续运行；仅在检测到有人且画面发生变化时，才以最高 1 FPS 向千问提交帧。
+  camera-audio-consent: 我分别授权在本次会话中将摄像头画面和真实麦克风音频上传至千问。
+  camera-privacy-mode: 隐私模式
+  resolution: 分辨率
+  start-camera: 开启摄像头云感知
+  budget:
+    session: 单次
+    day: 当日
+    month: 当月
+  state:
+    loading: 正在读取
+    blocked: 尚未就绪
+    ready: 已就绪
+    stopped: 已停止
+    failed: 失败
+perception-minecraft:
+  tab: Minecraft
+  title: 可信 Minecraft 感知
+  description: 只接收经过身份验证且符合结构化协议的游戏事件，并将其转换为短期客观事实。
+  privacy-notice: 全程在本机按事件处理。自由游戏文本和指令会被忽略，不使用屏幕、摄像头、麦克风或云端服务。
+  runtime: 已认证运行端
+  processing: 处理方式
+  local-structured: 本地结构化事件
+  indicator-description: 已认证的结构化游戏感知正在运行，可随时暂停或撤销授权。
+  indicator-status: '{connected} · {facts} 条新鲜事实'
+  connected: 运行端已连接
+  disconnected: 运行端不可用
+  no-runtime-context: 尚未发现经过身份验证的 Minecraft 运行端。
+  waiting-help: AIRI 已开启游戏感知，正在等待 Minecraft。请在游戏中按 K，允许本次会话并连接 AIRI，然后在下方核对验证码并批准配对。
+  runtime-context-stale: 最近一次结构化游戏更新已经过期。
+  runtime-context-age: '最近一次结构化游戏更新：{seconds} 秒前'
+  counts: '接受 {accepted} · 拒绝 {rejected} · 抑制 {suppressed}'
+  last-rejection: '最近一次脱敏拒绝：{code}'
+  consent: 我允许 AIRI 在本次会话中使用经过身份验证的 Minecraft 结构化事件，并可随时暂停或撤销授权。
+  start: 开启游戏感知
+  pause: 暂停
+  resume: 恢复
+  stop: 停止并撤销授权
+  pairing:
+    title: Minecraft 设备配对
+    refresh: 刷新
+    request: '请确认游戏中显示的验证码也是 {code}，一致后再批准。'
+    approve: 批准配对
+    reject: 拒绝
+    revoke: 撤销设备
+    empty: 暂无待批准请求。连接 Mod 后，配对请求会自动显示在这里。
+    error: 无法读取配对状态，请确认当前运行的是更新后的 AIRI。
+  state:
+    off: 游戏感知未开启
+    waiting: 正在等待已认证运行端
+    running: 游戏感知正在运行
+    paused: 游戏感知已暂停
+    failed: 游戏感知失败
+voice:
+  state:
+    idle: 语音未启动
+    requesting-permission: 请求麦克风权限
+    listening: 正在听你说
+    speech-detected: 检测到说话
+    transcribing: 正在转写
+    user-turn-ready: 准备发送语音内容
+    thinking: 正在思考回复
+    speaking: 正在说话
+    interrupted: 已中断，准备继续听
+    failed: 语音对话出错
+    stopped: 语音已停止
+  description:
+    disabled: 点击开始后，会先请求麦克风权限。
+    streaming: 使用流式转写时，最终文本会进入普通聊天安全链路。
+    recording: 当前 Provider 不支持流式输入，将在一句话结束后转写。
+    speaking: 默认暂停自动收音，避免把 AIRI 的声音当作你的输入。
+    failed: 语音会话未能继续，请打开对应设置检查配置。
+    hearing-not-configured: 尚未选择听力 Provider 和转写模型。
+    chat-not-configured: 本地听力已就绪，但尚未选择对话 Provider 和模型。
+    speech-not-configured: 尚未选择语音 Provider、模型或音色。
+    cloud-privacy-not-acknowledged: 请先在听力设置中确认云端 TTS 文本处理说明，再启动语音。
+    permission-denied: 未获得麦克风权限，请在系统设置中允许 AIRI 使用麦克风。
+    asr-error: 语音转写失败，请检查听力 Provider 和本地服务状态。
+    chat-error: 语音已转写，但发送到对话模型失败，请检查对话模型配置。
+    tts-error: 回复语音生成或播放失败，请检查语音 Provider 配置。
+  actions:
+    start: 开始语音
+    stop: 停止语音
+    interrupt: 打断并继续听
+    configure-hearing: 配置听力
+    configure-chat: 配置对话模型
+    configure-speech: 配置语音
+  recovery:
+    title: 语音消息需要处理
+    description: 转写完成后发送失败。你可以编辑这份仅保留在当前运行中的草稿，然后重试或丢弃。
+    editor-label: 可编辑的语音转写草稿
+    retry: 重试发送
+    retrying: 正在重试…
+    discard: 丢弃草稿
 widgets:
   close: 关闭小部件
   empty:

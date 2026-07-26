@@ -2,7 +2,8 @@ import type { ChatProvider } from '@xsai-ext/providers/utils'
 import type { Message } from '@xsai/shared-chat'
 
 import type { ChatHistoryItem, ContextMessage, StreamingAssistantMessage } from '../types/chat'
-import type { StreamEvent } from '../types/llm'
+import type { StreamEvent, StreamOptions } from '../types/llm'
+import type { SystemPromptSupplementInput } from './chat-orchestrator-runtime'
 
 import { ContextUpdateStrategy } from '@proj-airi/server-shared/types'
 import { describe, expect, it, vi } from 'vitest'
@@ -43,15 +44,17 @@ function createHarness() {
     llmFirstToken: [] as unknown[],
     assistantResponseRendered: [] as unknown[],
     messageRound: [] as unknown[],
+    queuedSendCancelled: [] as unknown[],
   }
-  const stream = vi.fn(async (_model: string, _chatProvider: ChatProvider, _messages: Message[], options?: {
-    onStreamEvent?: (event: StreamEvent) => Promise<void> | void
-  }) => {
+  const stream = vi.fn(async (_model: string, _chatProvider: ChatProvider, _messages: Message[], options?: StreamOptions) => {
     await options?.onStreamEvent?.({ type: 'text-delta', text: 'assistant reply' })
     await options?.onStreamEvent?.({ type: 'finish', finishReason: 'stop' })
   })
   const ids = ['stream-context', 'assistant-id', 'user-id', 'fallback-id']
-  let systemPromptSupplement: string | undefined
+  let systemPromptSupplement: SystemPromptSupplementInput | undefined
+  let rejectedOutputRuleIds: string[] = []
+  let rejectAssistantOutput = false
+  let bufferAssistantOutput = false
   let nowValue = new Date(2026, 3, 25, 18, 47).getTime()
   let monotonicNowValues = [1000]
   let generation = 1
@@ -82,6 +85,18 @@ function createHarness() {
     getActiveSessionId: () => 'session-1',
     getActiveProvider: () => 'mock-provider',
     getSystemPromptSupplement: () => systemPromptSupplement,
+    getAssistantOutputReleaseMode: () => bufferAssistantOutput ? 'after-validation' : 'stream',
+    allowBufferedSpecialOutput: ({ special }) => special.startsWith('<|ACT'),
+    validateAssistantOutput: () => rejectAssistantOutput
+      ? {
+          accepted: false,
+          replacementText: 'safe replacement',
+          ruleIds: ['test.output-policy'],
+        }
+      : { accepted: true },
+    onAssistantOutputRejected: ({ ruleIds }) => {
+      rejectedOutputRuleIds = ruleIds
+    },
     now: () => nowValue,
     monotonicNow: () => monotonicNowValues.shift() ?? 1000,
     createId: () => ids.shift() ?? 'generated-id',
@@ -100,6 +115,7 @@ function createHarness() {
     onLlmFirstToken: event => telemetry.llmFirstToken.push(event),
     onAssistantResponseRendered: event => telemetry.assistantResponseRendered.push(event),
     onMessageRound: event => telemetry.messageRound.push(event),
+    onQueuedSendCancelled: event => telemetry.queuedSendCancelled.push(event),
   })
 
   return {
@@ -126,11 +142,22 @@ function createHarness() {
     },
     promptProjections,
     runtime,
+    assistantOutputPolicy: {
+      reject: () => {
+        rejectAssistantOutput = true
+      },
+      rejectedRuleIds: () => rejectedOutputRuleIds,
+    },
+    assistantOutputRelease: {
+      bufferUntilValidated: () => {
+        bufferAssistantOutput = true
+      },
+    },
     sessionMessages,
     stateChanges,
     stream,
     systemPromptSupplement: {
-      set: (next: string | undefined) => {
+      set: (next: SystemPromptSupplementInput | undefined) => {
         systemPromptSupplement = next
       },
     },
@@ -140,16 +167,7 @@ function createHarness() {
   }
 }
 
-/**
- * @example
- * const runtime = createChatOrchestratorRuntime(deps)
- * await runtime.ingest('hello', { model, chatProvider })
- */
 describe('createChatOrchestratorRuntime', () => {
-  /**
-   * @example
-   * Hook order and prompt composition stay compatible with the stage-ui facade.
-   */
   it('keeps hook order and appends context prompt to the latest user message', async () => {
     const harness = createHarness()
     harness.contextSnapshot['system:weather'] = [
@@ -234,11 +252,6 @@ describe('createChatOrchestratorRuntime', () => {
     expect(harness.promptProjections).toHaveLength(1)
   })
 
-  /**
-   * @example
-   * deps.getSystemPromptSupplement() returns tool guidance.
-   * The runtime appends it to the existing provider system message.
-   */
   it('appends system prompt supplement to the provider system message', async () => {
     const harness = createHarness()
     let composedMessages: Message[] = []
@@ -260,11 +273,55 @@ describe('createChatOrchestratorRuntime', () => {
     })
   })
 
-  /**
-   * @example
-   * A session has only user history.
-   * The runtime creates a provider system message for supplemental guidance.
-   */
+  it('places structured supplements before and after the existing system prompt', async () => {
+    const harness = createHarness()
+    let composedMessages: Message[] = []
+    harness.systemPromptSupplement.set({
+      before: 'Before-character lore.',
+      after: 'After-character lore.',
+    })
+    harness.stream.mockImplementationOnce(async (_model, _chatProvider, messages, options) => {
+      composedMessages = messages
+      await options?.onStreamEvent?.({ type: 'text-delta', text: 'hello' })
+      await options?.onStreamEvent?.({ type: 'finish', finishReason: 'stop' })
+    })
+
+    await harness.runtime.ingest('hello from user', {
+      model: 'gpt-test',
+      chatProvider: provider,
+    })
+
+    expect(composedMessages[0]).toMatchObject({
+      role: 'system',
+      content: 'Before-character lore.\n\nsystem prompt\n\nAfter-character lore.',
+    })
+  })
+
+  it('atomically replaces a stored system prompt with an ordered composition', async () => {
+    const harness = createHarness()
+    let composedMessages: Message[] = []
+    harness.systemPromptSupplement.set({
+      replace: 'Safety.\n\nBefore lore.\n\nCharacter.\n\nAfter lore.',
+      before: 'ignored before',
+      after: 'ignored after',
+    })
+    harness.stream.mockImplementationOnce(async (_model, _chatProvider, messages, options) => {
+      composedMessages = messages
+      await options?.onStreamEvent?.({ type: 'text-delta', text: 'hello' })
+      await options?.onStreamEvent?.({ type: 'finish', finishReason: 'stop' })
+    })
+
+    await harness.runtime.ingest('hello from user', {
+      model: 'gpt-test',
+      chatProvider: provider,
+    })
+
+    expect(composedMessages[0]).toMatchObject({
+      role: 'system',
+      content: 'Safety.\n\nBefore lore.\n\nCharacter.\n\nAfter lore.',
+    })
+  })
+
   it('creates a system message when only a system prompt supplement is available', async () => {
     const harness = createHarness()
     let composedMessages: Message[] = []
@@ -288,10 +345,110 @@ describe('createChatOrchestratorRuntime', () => {
     expect(composedMessages[1]).toMatchObject({ role: 'user' })
   })
 
-  /**
-   * @example
-   * Runtime telemetry callbacks expose client-visible latency milestones.
-   */
+  it('replaces rejected assistant output before persistence', async () => {
+    const harness = createHarness()
+    harness.assistantOutputPolicy.reject()
+    harness.stream.mockImplementationOnce(async (_model, _chatProvider, _messages, options) => {
+      await options?.onStreamEvent?.({ type: 'reasoning-delta', text: 'unsafe reasoning' })
+      await options?.onStreamEvent?.({
+        type: 'tool-call',
+        toolCallId: 'unsafe-tool',
+        toolName: 'unsafe-action',
+        args: {},
+      } as StreamEvent)
+      await options?.onStreamEvent?.({
+        type: 'tool-result',
+        toolCallId: 'unsafe-tool',
+        result: 'unsafe result',
+      } as StreamEvent)
+      await options?.onStreamEvent?.({ type: 'text-delta', text: 'assistant reply' })
+      await options?.onStreamEvent?.({ type: 'finish', finishReason: 'stop' })
+    })
+
+    await harness.runtime.ingest('hello from user', {
+      model: 'gpt-test',
+      chatProvider: provider,
+    })
+
+    const assistant = harness.sessionMessages['session-1']?.findLast(message => message.role === 'assistant')
+    expect(assistant?.content).toBe('safe replacement')
+    expect(assistant).toMatchObject({
+      categorization: { reasoning: '', speech: 'safe replacement' },
+      slices: [{ type: 'text', text: 'safe replacement' }],
+      tool_results: [],
+    })
+    expect(harness.assistantAppended).toEqual([
+      expect.objectContaining({ messageText: 'safe replacement' }),
+    ])
+    expect(harness.assistantOutputPolicy.rejectedRuleIds()).toEqual(['test.output-policy'])
+  })
+
+  it('buffers companion output and disables provider tools until validation succeeds', async () => {
+    const harness = createHarness()
+    const released: string[] = []
+    harness.assistantOutputRelease.bufferUntilValidated()
+    harness.runtime.hooks.onTokenLiteral(async (literal) => {
+      released.push(`literal:${literal}`)
+    })
+    harness.runtime.hooks.onTokenSpecial(async (special) => {
+      released.push(`special:${special}`)
+    })
+    harness.stream.mockImplementationOnce(async (_model, _chatProvider, _messages, options) => {
+      expect(options?.tools).toBeUndefined()
+      expect(options?.waitForTools).toBe(false)
+      await options?.onStreamEvent?.({
+        type: 'text-delta',
+        text: '你好。<|CALL ["unsafe.action"]|><|ACT {"emotion":{"name":"happy","intensity":1}}|>',
+      })
+      expect(released).toEqual([])
+      expect(harness.foregroundPatches.at(-1)?.content).toBe('')
+      await options?.onStreamEvent?.({ type: 'finish', finishReason: 'stop' })
+    })
+
+    await harness.runtime.ingest('hello', {
+      model: 'gpt-test',
+      chatProvider: provider,
+      tools: [],
+    })
+
+    expect(released.join('\n')).toContain('literal:你好。')
+    expect(released).toContain('special:<|ACT {"emotion":{"name":"happy","intensity":1}}|>')
+    expect(released.join('\n')).not.toContain('CALL')
+    expect(harness.foregroundPatches.at(-1)?.content).toBe('你好。')
+  })
+
+  it('releases only the safe replacement when buffered output is rejected', async () => {
+    const harness = createHarness()
+    const releasedLiterals: string[] = []
+    const releasedSpecials: string[] = []
+    harness.assistantOutputRelease.bufferUntilValidated()
+    harness.assistantOutputPolicy.reject()
+    harness.runtime.hooks.onTokenLiteral(async (literal) => {
+      releasedLiterals.push(literal)
+    })
+    harness.runtime.hooks.onTokenSpecial(async (special) => {
+      releasedSpecials.push(special)
+    })
+    harness.stream.mockImplementationOnce(async (_model, _chatProvider, _messages, options) => {
+      await options?.onStreamEvent?.({
+        type: 'text-delta',
+        text: 'unsafe reply <|ACT {"emotion":{"name":"angry","intensity":1}}|>',
+      })
+      expect(releasedLiterals).toEqual([])
+      expect(releasedSpecials).toEqual([])
+      await options?.onStreamEvent?.({ type: 'finish', finishReason: 'stop' })
+    })
+
+    await harness.runtime.ingest('hello', {
+      model: 'gpt-test',
+      chatProvider: provider,
+    })
+
+    expect(releasedLiterals).toEqual(['safe replacement'])
+    expect(releasedSpecials).toEqual([])
+    expect(harness.foregroundPatches.every(patch => patch.content !== 'unsafe reply ')).toBe(true)
+  })
+
   it('emits telemetry milestones for a successful voice-backed message round', async () => {
     const harness = createHarness()
     harness.monotonicNow.set([100, 150, 250, 400, 460])
@@ -344,10 +501,6 @@ describe('createChatOrchestratorRuntime', () => {
     expect(harness.telemetry.chatActivationFailed).toEqual([])
   })
 
-  /**
-   * @example
-   * await expect(runtime.ingest('hello', { model, chatProvider })).rejects.toThrow('provider rejected')
-   */
   it('emits chat activation failure telemetry without raw provider messages', async () => {
     const harness = createHarness()
     harness.stream.mockRejectedValueOnce(new Error('provider rejected with sensitive details'))
@@ -373,10 +526,6 @@ describe('createChatOrchestratorRuntime', () => {
     }])
   })
 
-  /**
-   * @example
-   * Cancelling a queued send rejects only pending work that has not started.
-   */
   it('rejects cancelled queued sends before they start', async () => {
     const harness = createHarness()
     let releaseFirstSend: (() => void) | undefined
@@ -406,12 +555,9 @@ describe('createChatOrchestratorRuntime', () => {
 
     await expect(secondSend).rejects.toThrow('Chat session was reset before send could start')
     await firstSend
+    expect(harness.telemetry.queuedSendCancelled).toEqual([{ reason: 'session_reset' }])
   })
 
-  /**
-   * @example
-   * A queued send rejects if its captured session generation becomes stale.
-   */
   it('rejects stale generation sends before they start', async () => {
     const harness = createHarness()
     let releaseFirstSend: (() => void) | undefined
@@ -444,11 +590,6 @@ describe('createChatOrchestratorRuntime', () => {
     expect(harness.stream).toHaveBeenCalledTimes(1)
   })
 
-  /**
-   * @example
-   * runtime.setSending(true)
-   * expect(runtime.getSending()).toBe(true)
-   */
   it('keeps sending externally writable for UI facades', () => {
     const harness = createHarness()
 
@@ -467,11 +608,6 @@ describe('createChatOrchestratorRuntime', () => {
     })
   })
 
-  /**
-   * @example
-   * const snapshot = runtime.getPendingQueuedSendSnapshot()
-   * expect(snapshot[0].inputType).toBe('input:text')
-   */
   it('returns pending queued send snapshots with public fields', async () => {
     const harness = createHarness()
     let releaseFirstSend: (() => void) | undefined
@@ -529,10 +665,6 @@ describe('createChatOrchestratorRuntime', () => {
     await firstSend
   })
 
-  /**
-   * @example
-   * Attachments, reasoning deltas, and tool events update the assistant builder.
-   */
   it('handles attachments, reasoning deltas, tool events, and assistant finalization', async () => {
     const harness = createHarness()
     let composedMessages: Message[] = []

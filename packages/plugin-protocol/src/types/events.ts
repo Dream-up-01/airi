@@ -547,6 +547,26 @@ export enum ContextUpdateStrategy {
   AppendSelf = 'append-self',
 }
 
+/** Shared wire contract for authenticated, bounded Minecraft perception updates. */
+export const MINECRAFT_PERCEPTION_LANE = 'minecraft:perception:v1' as const
+export const MINECRAFT_PERCEPTION_SCHEMA_VERSION = 1 as const
+
+export interface MinecraftPerceptionWireEvent {
+  schemaVersion: typeof MINECRAFT_PERCEPTION_SCHEMA_VERSION
+  eventId: string
+  sequence: number
+  observedAt: number
+  ttlMs: number
+  eventType:
+    | 'connection-health'
+    | 'player-status'
+    | 'task-state'
+    | 'nearby-threat'
+  phase: 'started' | 'updated' | 'ended' | 'observed'
+  value: string
+  confidence: number
+}
+
 export interface ContextUpdateDestinationAll {
   all: true
 }
@@ -710,6 +730,35 @@ interface ModuleAuthenticateEvent {
 
 interface ModuleAuthenticatedEvent {
   authenticated: boolean
+}
+
+export interface ModulePairingHelloEvent {
+  protocolVersion: 1
+  moduleInstanceId: string
+  deviceId: string
+  publicKey: string
+  algorithm: 'Ed25519'
+  displayName: string
+  clientVersion: string
+}
+
+export interface ModulePairingChallengeEvent {
+  protocolVersion: 1
+  moduleInstanceId: string
+  requestId: string
+  nonce: string
+  verificationCode: string
+  expiresAt: number
+  requiresApproval: boolean
+}
+
+export interface ModulePairingProveEvent {
+  protocolVersion: 1
+  moduleInstanceId: string
+  requestId: string
+  deviceId: string
+  publicKey: string
+  signature: string
 }
 
 interface ModuleCompatibilityRequestEvent {
@@ -1315,6 +1364,9 @@ export interface ProtocolEvents<C = undefined> {
 
   'module:authenticate': ModuleAuthenticateEvent
   'module:authenticated': ModuleAuthenticatedEvent
+  'module:pairing:hello': ModulePairingHelloEvent
+  'module:pairing:challenge': ModulePairingChallengeEvent
+  'module:pairing:prove': ModulePairingProveEvent
   /**
    * Plugin asks host to negotiate protocol + API compatibility.
    */

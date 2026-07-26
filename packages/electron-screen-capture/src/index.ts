@@ -3,6 +3,7 @@ import type { DesktopCapturerSource, SourcesOptions, systemPreferences } from 'e
 import { defineInvokeEventa } from '@moeru/eventa'
 
 export interface SerializableDesktopCapturerSource extends Pick<DesktopCapturerSource, 'id' | 'name' | 'display_id'> {
+  ownedByCurrentApp: boolean
   appIcon?: Uint8Array
   thumbnail?: Uint8Array
 }

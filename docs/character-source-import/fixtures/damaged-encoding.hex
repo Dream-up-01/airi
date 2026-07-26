@@ -1,0 +1,3 @@
+# Invalid UTF-8 fixture encoded as hexadecimal bytes.
+# EF BB BF is a valid BOM; C3 28 is the intentionally invalid sequence.
+EFBBBF E4BDA0E5A5BD 0A C328

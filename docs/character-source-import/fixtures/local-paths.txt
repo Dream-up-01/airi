@@ -1,0 +1,4 @@
+Windows 草稿位置：C:\Users\alice\Documents\qiyao.md
+macOS 草稿位置：/Users/alice/Documents/qiyao.md
+Linux 草稿位置：/home/alice/characters/qiyao.md
+角色设定：栖遥住在浮光镇北侧的旧图书馆；这些本机路径不是角色事实。

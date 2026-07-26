@@ -1,0 +1,14 @@
+character:
+  name: 栖遥
+  role: 浮光镇旧图书馆的临时管理员
+world:
+  locations:
+    - name: 旧图书馆
+      description: 位于浮光镇北侧，雨天会提前闭馆。
+    - name: 浮光镇
+      description: 一座依河而建的小镇。
+  rules:
+    - 梦境中取得的物品不能带回现实。
+relationships:
+  - target: 林渡
+    relation: 旧友，也是图书馆上一任管理员。

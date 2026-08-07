@@ -13,7 +13,15 @@ import { toXml } from 'xast-util-to-xml'
 import { x } from 'xastscript'
 
 import { getDefaultSpeechModel, getDefaultStreamingModel, OFFICIAL_SPEECH_PROVIDER_ID, OFFICIAL_SPEECH_STREAMING_PROVIDER_ID, setupOfficialSpeechAutoPick } from '../../libs/providers/providers/official'
-import { useProvidersStore } from '../providers'
+import {
+  MINIMAX_SPEECH_DEFAULT_MODEL,
+  MINIMAX_SPEECH_DEFAULT_VOICE,
+  useProvidersStore,
+} from '../providers'
+
+export const DEFAULT_SPEECH_PROVIDER_ID = 'minimax-speech' as const
+const SPEECH_DEFAULTS_VERSION_KEY = 'settings/speech/defaults-version'
+const SPEECH_DEFAULTS_VERSION = 1
 
 export function toSignedPercent(value: number): string {
   if (value > 0)
@@ -42,9 +50,10 @@ export const useSpeechStore = defineStore('speech', () => {
   const { locale } = useI18n()
 
   // State
-  const activeSpeechProvider = useLocalStorageManualReset<string>('settings/speech/active-provider', 'speech-noop')
-  const activeSpeechModel = useLocalStorageManualReset<string>('settings/speech/active-model', '')
-  const activeSpeechVoiceId = useLocalStorageManualReset<string>('settings/speech/voice', '')
+  const activeSpeechProvider = useLocalStorageManualReset<string>('settings/speech/active-provider', DEFAULT_SPEECH_PROVIDER_ID)
+  const activeSpeechModel = useLocalStorageManualReset<string>('settings/speech/active-model', MINIMAX_SPEECH_DEFAULT_MODEL)
+  const activeSpeechVoiceId = useLocalStorageManualReset<string>('settings/speech/voice', MINIMAX_SPEECH_DEFAULT_VOICE)
+  const speechDefaultsVersion = useLocalStorageManualReset<number>(SPEECH_DEFAULTS_VERSION_KEY, 0)
   const activeSpeechVoice = refManualReset<VoiceInfo | undefined>(undefined)
 
   const pitch = useLocalStorageManualReset<number>('settings/speech/pitch', 0)
@@ -54,6 +63,34 @@ export const useSpeechStore = defineStore('speech', () => {
   const speechProviderError = refManualReset<string | null>(null)
   const availableVoices = refManualReset<Record<string, VoiceInfo[]>>(() => ({}))
   const modelSearchQuery = refManualReset<string>('')
+
+  function ensureMiniMaxDefaults() {
+    if (activeSpeechProvider.value !== DEFAULT_SPEECH_PROVIDER_ID)
+      return
+
+    const providerConfig = providersStore.getProviderConfig(DEFAULT_SPEECH_PROVIDER_ID)
+    const configuredModel = typeof providerConfig?.model === 'string' ? providerConfig.model.trim() : ''
+    const configuredVoice = typeof providerConfig?.voice === 'string' ? providerConfig.voice.trim() : ''
+    if (!activeSpeechModel.value)
+      activeSpeechModel.value = configuredModel || MINIMAX_SPEECH_DEFAULT_MODEL
+    if (!activeSpeechVoiceId.value)
+      activeSpeechVoiceId.value = configuredVoice || MINIMAX_SPEECH_DEFAULT_VOICE
+  }
+
+  // Migrate the old silent default once. A user can still explicitly choose
+  // speech-noop afterwards; the version marker prevents that choice from being
+  // rewritten on every renderer startup. The MiniMax profile may remain
+  // unconfigured until credentials are supplied, but it must remain visible as
+  // the selected default instead of silently switching to Seed/official TTS.
+  if (speechDefaultsVersion.value < SPEECH_DEFAULTS_VERSION) {
+    if (activeSpeechProvider.value === 'speech-noop') {
+      activeSpeechProvider.value = DEFAULT_SPEECH_PROVIDER_ID
+      activeSpeechModel.value = MINIMAX_SPEECH_DEFAULT_MODEL
+      activeSpeechVoiceId.value = MINIMAX_SPEECH_DEFAULT_VOICE
+    }
+    speechDefaultsVersion.value = SPEECH_DEFAULTS_VERSION
+  }
+  ensureMiniMaxDefaults()
 
   // Computed properties
   const availableSpeechProvidersMetadata = computed(() => allAudioSpeechProvidersMetadata.value)
@@ -170,6 +207,7 @@ export const useSpeechStore = defineStore('speech', () => {
   }
 
   function ensureActiveSpeechModel() {
+    ensureMiniMaxDefaults()
     ensureStreamingDefaultModel()
 
     if (activeSpeechProvider.value !== OFFICIAL_SPEECH_PROVIDER_ID)
@@ -194,6 +232,7 @@ export const useSpeechStore = defineStore('speech', () => {
   watch(activeSpeechProvider, async (newProvider) => {
     if (!newProvider)
       return
+    ensureMiniMaxDefaults()
     ensureActiveSpeechModel()
     await loadVoicesForProvider(newProvider, activeSpeechModel.value || undefined)
     // Don't reset voice settings when changing providers to allow for persistence
@@ -203,7 +242,8 @@ export const useSpeechStore = defineStore('speech', () => {
   })
 
   if (!activeSpeechProvider.value) {
-    activeSpeechProvider.value = 'speech-noop'
+    activeSpeechProvider.value = DEFAULT_SPEECH_PROVIDER_ID
+    ensureMiniMaxDefaults()
   }
 
   watch(
@@ -226,6 +266,11 @@ export const useSpeechStore = defineStore('speech', () => {
       // configuredSpeechProvidersMetadata and incorrectly reset activeSpeechProvider
       // to 'speech-noop', permanently wiping the persisted selection from localStorage.
       if (!configuredProviderIds.includes(activeSpeechProvider.value)) {
+        // MiniMax is the explicit product default. Keep the selection visible
+        // while credentials are missing so the user can configure it; do not
+        // silently replace it with the legacy noop or an official Seed route.
+        if (activeSpeechProvider.value === DEFAULT_SPEECH_PROVIDER_ID)
+          return
         activeSpeechProvider.value = 'speech-noop'
         activeSpeechModel.value = ''
         activeSpeechVoiceId.value = ''
@@ -405,6 +450,14 @@ export const useSpeechStore = defineStore('speech', () => {
 
     let hasModel = !!activeSpeechModel.value
     let hasVoice = !!activeSpeechVoiceId.value
+
+    // Selection and activation are separate: the default MiniMax profile is
+    // visible before an API key is configured, but it cannot be considered
+    // ready for the Stage runtime until provider validation succeeds.
+    if (activeSpeechProvider.value === DEFAULT_SPEECH_PROVIDER_ID
+      && !providersStore.configuredProviders[activeSpeechProvider.value]) {
+      return false
+    }
 
     // For OpenAI Compatible providers, check provider config as fallback
     if (activeSpeechProvider.value === 'openai-compatible-audio-speech') {

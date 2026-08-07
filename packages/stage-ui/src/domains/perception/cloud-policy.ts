@@ -1,7 +1,8 @@
-export const QWEN_CLOUD_POLICY_VERSION = 'perception-cloud-policy/v0.3' as const
+export const QWEN_CLOUD_POLICY_VERSION = 'perception-cloud-policy/v0.4' as const
 export const QWEN_CLOUD_PROVIDER_ID = 'aliyun-bailian' as const
 export const QWEN_CLOUD_REGION_ID = 'cn-mainland' as const
 export const QWEN_CLOUD_ENDPOINT_REGION_ID = 'cn-beijing' as const
+export const QWEN_CLOUD_PRIVACY_PROFILE_ID = 'qwen-realtime-cn-support-2026-07-27' as const
 export const QWEN_FLASH_REALTIME_MODEL_ID = 'qwen3.5-omni-flash-realtime' as const
 export const QWEN_PLUS_REALTIME_MODEL_ID = 'qwen3.5-omni-plus-realtime' as const
 export const QWEN_CLOUD_COST_BOUNDARY_ID = 'qwen-cloud-cny-5-10-50-v1' as const
@@ -50,7 +51,11 @@ export interface QwenCloudPerceptionPolicy {
   responseControl: 'manual'
   failureMode: 'stop-no-fallback'
   localRetention: 'none'
-  providerRetention: 'shortest-available-no-training'
+  providerPrivacyProfileId: typeof QWEN_CLOUD_PRIVACY_PROFILE_ID
+  providerRetention: 'service-logs-one-month'
+  providerDataUse: 'not-used-for-training-improvement-evaluation-or-human-review'
+  providerDataBoundary: 'cn-mainland-no-cross-region-or-cross-border'
+  sessionContextRetention: 'cleared-on-disconnect'
   proactiveReactions: false
   costBoundaryId: typeof QWEN_CLOUD_COST_BOUNDARY_ID
   budgets: QwenCloudBudgetLimits
@@ -80,7 +85,11 @@ export const approvedQwenCloudPerceptionPolicy: Readonly<QwenCloudPerceptionPoli
   responseControl: 'manual',
   failureMode: 'stop-no-fallback',
   localRetention: 'none',
-  providerRetention: 'shortest-available-no-training',
+  providerPrivacyProfileId: QWEN_CLOUD_PRIVACY_PROFILE_ID,
+  providerRetention: 'service-logs-one-month',
+  providerDataUse: 'not-used-for-training-improvement-evaluation-or-human-review',
+  providerDataBoundary: 'cn-mainland-no-cross-region-or-cross-border',
+  sessionContextRetention: 'cleared-on-disconnect',
   proactiveReactions: false,
   costBoundaryId: QWEN_CLOUD_COST_BOUNDARY_ID,
   budgets: Object.freeze({
@@ -107,11 +116,15 @@ export function parseQwenCloudPerceptionPolicy(input: unknown): QwenCloudPolicyP
     'localRetention',
     'outputMode',
     'proactiveReactions',
+    'providerDataBoundary',
+    'providerDataUse',
     'providerId',
+    'providerPrivacyProfileId',
     'providerRetention',
     'regionId',
     'responseControl',
     'screen',
+    'sessionContextRetention',
   ])) {
     return { success: false, errorCode: 'cloud-policy-invalid' }
   }
@@ -153,7 +166,11 @@ export function parseQwenCloudPerceptionPolicy(input: unknown): QwenCloudPolicyP
     || input.responseControl !== 'manual'
     || input.failureMode !== 'stop-no-fallback'
     || input.localRetention !== 'none'
-    || input.providerRetention !== 'shortest-available-no-training'
+    || input.providerPrivacyProfileId !== QWEN_CLOUD_PRIVACY_PROFILE_ID
+    || input.providerRetention !== 'service-logs-one-month'
+    || input.providerDataUse !== 'not-used-for-training-improvement-evaluation-or-human-review'
+    || input.providerDataBoundary !== 'cn-mainland-no-cross-region-or-cross-border'
+    || input.sessionContextRetention !== 'cleared-on-disconnect'
     || input.proactiveReactions !== false
     || input.costBoundaryId !== QWEN_CLOUD_COST_BOUNDARY_ID) {
     return { success: false, errorCode: 'cloud-policy-invalid' }

@@ -479,6 +479,7 @@ pages:
         invalid_artistry_json: 'Error: Artistry provider options contains invalid JSON.'
       none: None
     modules: Modules
+    name: Name
     name_asc: Name (A-Z)
     name_desc: Name (Z-A)
     character_source_import:
@@ -898,7 +899,7 @@ pages:
       voice-conversation:
         preferences:
           title: Voice conversation
-          description: Safe runtime preferences for microphone turn-taking. Unsupported modes remain unavailable.
+          description: Safe runtime preferences for microphone turn-taking and echo-protected interruption.
           mode: Conversation mode
           interruption-policy: Interruption policy
           vad-threshold: VAD threshold
@@ -913,7 +914,7 @@ pages:
         interruptions:
           disabled: Disabled
           push: Push to interrupt
-          vad-unavailable: Automatic VAD barge-in (unavailable without echo protection)
+          vad: Automatic VAD barge-in (echo-protected; verify on your microphone)
         local-asr:
           title: Local ASR model switch
           description: Qwen remains visible while stopped. Its local service starts only after you click, and the model changes only after a successful health check.
@@ -939,7 +940,9 @@ pages:
             unexpected: The local ASR switch failed; the previous model remains active.
           notices:
             previous-service-not-managed: The previous service was not started by this AIRI session, so it was not force-closed; close its terminal manually if it is still running.
-            previous-service-stop-failed: The new model is active, but the previous local service could not be closed; close its terminal manually.
+            previous-service-stop-failed: The previous local service could not be closed, so the model was not switched; close its terminal manually and try again.
+            runtime-quiesce-failed: The active voice runtime could not be stopped cleanly, so the local ASR was not switched.
+            runtime-quiesce-timeout: The active voice runtime did not acknowledge the stop request, so the local ASR was not switched.
         diagnostics:
           title: Voice diagnostics
           description: Runtime-only capability and latency summaries. Transcript and audio content are not shown.
@@ -1012,7 +1015,9 @@ pages:
           unexpected: The speech provider switch failed; the previous provider remains active.
         notices:
           previous-service-not-managed: The previous service was not started by this AIRI session, so it was not force-closed; close its terminal manually if it is still running.
-          previous-service-stop-failed: The new provider is active, but the previous local service could not be closed; close its terminal manually.
+          previous-service-stop-failed: The previous local service could not be closed, so the provider was not switched; close its terminal manually and try again.
+          runtime-quiesce-failed: The active voice runtime could not be stopped cleanly, so the new speech setting was not published.
+          runtime-quiesce-timeout: The active voice runtime did not acknowledge the stop request, so the new speech setting was not published.
       sections:
         section:
           playground:
@@ -1379,6 +1384,8 @@ pages:
           validate_and_activate_button: Validate and use as streaming ASR
           starting_button: Starting Qwen3-ASR…
           activation_failed: Qwen3-ASR started but did not pass its streaming health check.
+          runtime_quiesce_failed: The active voice runtime could not be stopped cleanly, so Qwen3-ASR was not activated.
+          runtime_quiesce_timeout: The active voice runtime did not acknowledge the stop request, so Qwen3-ASR was not activated.
           start_errors:
             desktop_required: AIRI can start this local service only from the desktop app.
             launcher_missing: The bundled Qwen3-ASR launcher is unavailable in this AIRI installation.
@@ -1417,6 +1424,8 @@ pages:
           validate_and_activate_button: Start, validate, and use as Chinese ASR
           starting_button: Starting SenseVoice…
           activation_failed: SenseVoice started but did not pass its health check.
+          runtime_quiesce_failed: The active voice runtime could not be stopped cleanly, so SenseVoice was not activated.
+          runtime_quiesce_timeout: The active voice runtime did not acknowledge the stop request, so SenseVoice was not activated.
           start_errors:
             desktop_required: AIRI can start this local service only from the desktop app.
             launcher_missing: The bundled SenseVoice launcher is unavailable in this AIRI installation.
@@ -1633,6 +1642,7 @@ pages:
           title: Voice Playground
           validation:
             error-missing-api-key: Please enter an API key to test the voice.
+            error-playback: The generated audio could not be played.
         title: ElevenLabs
       kokoro-local:
         description: Local text-to-speech using Kokoro-82M.

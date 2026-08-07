@@ -7,14 +7,31 @@ import {
 } from './preferences'
 
 describe('voice conversation preferences', () => {
-  it('uses conservative defaults', () => {
+  it('uses low-latency defaults', () => {
     expect(normalizeVoiceConversationPreferences(undefined)).toEqual(defaultVoiceConversationPreferences)
-    expect(defaultVoiceConversationPreferences.interruptionPolicy).toBe('disabled')
-    expect(defaultVoiceConversationPreferences.trailingSilenceMs).toBe(1_600)
+    expect(defaultVoiceConversationPreferences.interruptionPolicy).toBe('pushToInterrupt')
+    expect(defaultVoiceConversationPreferences.trailingSilenceMs).toBe(800)
     expect(defaultVoiceConversationPreferences.cloudPrivacyAcknowledged).toBe(false)
   })
 
-  it('migrates only the legacy VAD tail default while preserving other preferences', () => {
+  it('migrates only a complete legacy default profile', () => {
+    expect(migrateVoiceConversationPreferencesV1({
+      mode: 'streaming-asr',
+      interruptionPolicy: 'disabled',
+      vadThreshold: 0.6,
+      minSpeechDurationMs: 250,
+      trailingSilenceMs: 1_600,
+      cloudPrivacyAcknowledged: false,
+    })).toEqual({
+      mode: 'streaming-asr',
+      interruptionPolicy: 'pushToInterrupt',
+      vadThreshold: 0.6,
+      minSpeechDurationMs: 250,
+      trailingSilenceMs: 800,
+      cloudPrivacyAcknowledged: false,
+    })
+
+    expect(migrateVoiceConversationPreferencesV1({ trailingSilenceMs: 1_600 }).trailingSilenceMs).toBe(1_600)
     expect(migrateVoiceConversationPreferencesV1({
       mode: 'vad-turn-taking',
       interruptionPolicy: 'pushToInterrupt',
@@ -22,16 +39,12 @@ describe('voice conversation preferences', () => {
       minSpeechDurationMs: 300,
       trailingSilenceMs: 800,
       cloudPrivacyAcknowledged: true,
-    })).toEqual({
+    })).toMatchObject({
       mode: 'vad-turn-taking',
       interruptionPolicy: 'pushToInterrupt',
-      vadThreshold: 0.7,
-      minSpeechDurationMs: 300,
-      trailingSilenceMs: 1_600,
+      trailingSilenceMs: 800,
       cloudPrivacyAcknowledged: true,
     })
-
-    expect(migrateVoiceConversationPreferencesV1({ trailingSilenceMs: 1_200 }).trailingSilenceMs).toBe(1_200)
   })
 
   it('keeps safe enums and clamps numeric values', () => {

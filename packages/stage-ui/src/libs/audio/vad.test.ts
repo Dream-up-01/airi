@@ -38,24 +38,42 @@ class FakeAudioContext {
 }
 
 class FakeAudioWorkletNode extends FakeAudioNode {
+  static instances: FakeAudioWorkletNode[] = []
+
   constructor() {
     super()
+    FakeAudioWorkletNode.instances.push(this)
   }
 }
 
-function createVADMock(): BaseVAD & { reset: ReturnType<typeof vi.fn> } {
+function createVADMock() {
   return {
-    initialize: vi.fn(async () => {}),
-    processAudio: vi.fn(async () => {}),
+    initialize: vi.fn<BaseVAD['initialize']>(async () => {}),
+    processAudio: vi.fn<BaseVAD['processAudio']>(async () => {}),
     reset: vi.fn(),
     on: vi.fn(),
     off: vi.fn(),
   }
 }
 
+function latestWorkletNode() {
+  const node = FakeAudioWorkletNode.instances.at(-1)
+  if (!node)
+    throw new Error('Expected a VAD audio worklet node.')
+
+  return node
+}
+
+function postWorkletAudio(node: FakeAudioWorkletNode, samples: number[]) {
+  node.port.onmessage?.({
+    data: { buffer: new Float32Array(samples) },
+  } as MessageEvent)
+}
+
 describe('createVADStates', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    FakeAudioWorkletNode.instances = []
   })
 
   it('does not stop the caller-owned microphone stream when disposing VAD nodes', async () => {
@@ -138,5 +156,128 @@ describe('createVADStates', () => {
 
     expect(createdSources).toHaveLength(2)
     expect(createdSources[1].disconnect).not.toHaveBeenCalled()
+  })
+
+  it('ignores a delayed worklet callback after VAD is stopped', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
+    const stream = { getTracks: () => [] } as unknown as MediaStream
+    const vad = createVADMock()
+    const manager = createVADStates(vad, '/vad-worklet.js')
+
+    await manager.initialize()
+    await manager.start(stream)
+    const delayedCallback = latestWorkletNode().port.onmessage
+
+    await manager.stop()
+    delayedCallback?.({ data: { buffer: new Float32Array([0.1, 0.2]) } } as MessageEvent)
+    await Promise.resolve()
+
+    expect(vad.processAudio).not.toHaveBeenCalled()
+  })
+
+  it('ignores a delayed worklet callback after VAD is disposed', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
+    const stream = { getTracks: () => [] } as unknown as MediaStream
+    const vad = createVADMock()
+    const manager = createVADStates(vad, '/vad-worklet.js')
+
+    await manager.initialize()
+    await manager.start(stream)
+    const delayedCallback = latestWorkletNode().port.onmessage
+
+    manager.dispose()
+    delayedCallback?.({ data: { buffer: new Float32Array([0.1, 0.2]) } } as MessageEvent)
+    await Promise.resolve()
+
+    expect(vad.processAudio).not.toHaveBeenCalled()
+  })
+
+  it('ignores callbacks from a replaced microphone graph while processing the new graph', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
+    const firstStream = { getTracks: () => [] } as unknown as MediaStream
+    const secondStream = { getTracks: () => [] } as unknown as MediaStream
+    const vad = createVADMock()
+    const manager = createVADStates(vad, '/vad-worklet.js')
+
+    await manager.initialize()
+    await manager.start(firstStream)
+    const delayedCallback = latestWorkletNode().port.onmessage
+
+    await manager.start(secondStream)
+    delayedCallback?.({ data: { buffer: new Float32Array([0.1, 0.2]) } } as MessageEvent)
+    postWorkletAudio(latestWorkletNode(), [0.3, 0.4])
+
+    await vi.waitFor(() => expect(vad.processAudio).toHaveBeenCalledTimes(1))
+    expect(vad.processAudio).toHaveBeenLastCalledWith(
+      new Float32Array([0.3, 0.4]),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+  })
+
+  it('aborts active VAD processing on stop so it cannot emit stale behavior', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
+    const stream = { getTracks: () => [] } as unknown as MediaStream
+    let resolveProcessing: (() => void) | undefined
+    let processingCompleted = false
+    const staleEvents: string[] = []
+    const vad = createVADMock()
+    vad.processAudio.mockImplementation(async (_buffer, options) => {
+      await new Promise<void>((resolve) => {
+        resolveProcessing = resolve
+      })
+
+      if (!options?.signal?.aborted)
+        staleEvents.push('speech-start')
+
+      processingCompleted = true
+    })
+    const manager = createVADStates(vad, '/vad-worklet.js')
+
+    await manager.initialize()
+    await manager.start(stream)
+    postWorkletAudio(latestWorkletNode(), [0.1, 0.2])
+    await vi.waitFor(() => expect(vad.processAudio).toHaveBeenCalledTimes(1))
+
+    await manager.stop()
+    resolveProcessing?.()
+    await vi.waitFor(() => expect(processingCompleted).toBe(true))
+
+    expect(vad.processAudio.mock.calls[0][1]?.signal?.aborted).toBe(true)
+    expect(staleEvents).toEqual([])
+  })
+
+  it('bounds pending worklet audio and keeps the newest chunks', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
+    const stream = { getTracks: () => [] } as unknown as MediaStream
+    let resolveFirstChunk: (() => void) | undefined
+    const processedSamples: number[] = []
+    const vad = createVADMock()
+    vad.processAudio.mockImplementation(async (buffer) => {
+      processedSamples.push(buffer[0])
+      if (processedSamples.length === 1) {
+        await new Promise<void>((resolve) => {
+          resolveFirstChunk = resolve
+        })
+      }
+    })
+    const manager = createVADStates(vad, '/vad-worklet.js', { maxQueuedChunks: 2 })
+
+    await manager.initialize()
+    await manager.start(stream)
+    const node = latestWorkletNode()
+    postWorkletAudio(node, [1])
+    await vi.waitFor(() => expect(processedSamples).toEqual([1]))
+
+    postWorkletAudio(node, [2])
+    postWorkletAudio(node, [3])
+    postWorkletAudio(node, [4])
+    resolveFirstChunk?.()
+
+    await vi.waitFor(() => expect(processedSamples).toEqual([1, 3, 4]))
   })
 })

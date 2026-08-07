@@ -58,6 +58,8 @@ perception-screen:
   refresh: Refresh
   refreshing: Refreshing…
   no-sources: No eligible external screen or window was found.
+  sampling-rate: Frame check frequency
+  sampling-rate-option: '{rate} per second'
   consent: I allow AIRI to observe the selected source locally for this session. I understand sensitive surfaces are automatically paused and I can stop at any time.
   sensitive-pause: Pause analysis for a sensitive surface
   start: Start observation
@@ -78,7 +80,7 @@ perception-screen:
   confirm-fact: Confirm
   correct-fact: Not correct
   clear-facts: Clear current session facts
-  capture-profile: '{resolution} · target {cadence}'
+  capture-profile: '{resolution} · {rate} checks per second · analyzer admission remains 0.2–1 frame per second'
   capture-counts: '{attempts} sampled · {accepted} accepted · {dropped} dropped · {facts} fact results'
   error-with-code: 'Desktop observation could not continue ({code}). No frame was retained.'
   state:
@@ -100,7 +102,9 @@ perception-camera:
   starting: Starting local analyzers…
   pause: Pause
   stop: Stop and revoke
-  capture-profile: 640×360 · MediaPipe/OpenCV up to 10 Hz · YOLO up to 2 Hz
+  sampling-rate: Camera sampling frequency
+  sampling-rate-option: '{rate} per second'
+  capture-profile: '640×360 · MediaPipe target {rate} per second · OpenCV up to 10 per second · YOLO up to 2 per second'
   capture-counts: '{observations} working frames · {dropped} dropped · {facts} fresh facts'
   error-with-code: 'Local camera perception could not continue ({code}). No frame was retained.'
   analyzer:
@@ -127,8 +131,9 @@ perception-cloud:
   title: Qwen cloud perception
   endpoint: 'Region: {region}'
   region-label: China mainland · China North 2 (Beijing)
+  region-boundary: China mainland Endpoint traffic does not cross regions or borders.
   no-upload: No cloud upload is active. Frames and microphone audio require separate consent for each perception session.
-  upload-active: Qwen cloud upload is active for the selected source. Audio and frames remain memory-only and can be stopped immediately.
+  upload-active: Qwen cloud upload is active for the selected source. AIRI keeps local raw audio and frames memory-only and releases them after processing. Data sent to Qwen may enter service logs retained for one month; upload can be stopped immediately.
   refresh: Refresh cloud status
   validate: Validate configuration
   validation-complete: Configuration check completed. Cloud upload remains off.
@@ -152,12 +157,13 @@ perception-cloud:
   output: Output
   text-only-manual: Text-only objective JSON · Manual response control
   retention: Retention
-  retention-value: Shortest available · not used for training · console verification required
+  retention-value: 'Service logs: one month · model session context cleared immediately on disconnect · not used for training, improvement, evaluation, or human review'
   budget-title: Cost guard
   screen-session-title: Screen cloud session
   refresh-sources: Refresh screen and window sources
   select-screen-source: Select a screen or window
-  screen-audio-consent: I authorize the selected screen frames and real microphone audio to be uploaded to Qwen for this session. No model transcript or audio output will enter chat.
+  screen-frame-consent: I authorize the selected screen frames to be uploaded to Qwen for this session; uploaded frames may enter service logs retained for one month.
+  screen-audio-consent: I separately authorize real microphone audio to be uploaded to Qwen for this screen session; uploaded audio may enter service logs retained for one month. No model transcript or audio output will enter chat.
   capture-state: Capture
   windows: Windows
   facts: Fresh facts
@@ -166,7 +172,11 @@ perception-cloud:
   stop-screen: Stop and revoke
   camera-session-title: Camera cloud session
   camera-mixed-description: Local MediaPipe, OpenCV, and YOLO remain active. Only changed, person-present frames are admitted to Qwen at up to 1 FPS.
-  camera-audio-consent: I separately authorize camera frames and real microphone audio to be uploaded to Qwen for this session.
+  sampling-rate: Sampling attempt frequency
+  sampling-rate-option: '{rate} per second'
+  sampling-rate-limit: 'Target {target} per second; cloud upload remains capped at {limit} per second.'
+  camera-frame-consent: I authorize camera frames to be uploaded to Qwen for this session; uploaded frames may enter service logs retained for one month.
+  camera-audio-consent: I separately authorize real microphone audio to be uploaded to Qwen for this camera session; uploaded audio may enter service logs retained for one month. No model transcript or audio output will enter chat.
   camera-privacy-mode: Privacy mode
   resolution: Resolution
   start-camera: Start camera cloud perception

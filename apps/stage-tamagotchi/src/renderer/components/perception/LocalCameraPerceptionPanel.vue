@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import type { PerceptionObservabilitySnapshot } from '@proj-airi/stage-ui/domains/perception'
+import type { PerceptionObservabilitySnapshot, PerceptionSamplingRate } from '@proj-airi/stage-ui/domains/perception'
 
 import type { PerceptionRuntimeStatusWire } from '../../../shared/eventa/perception-runtime-status'
 import type { LocalCameraPerceptionStatus } from '../../services/perception/local-camera-perception-coordinator'
 
+import { PERCEPTION_SAMPLING_RATES } from '@proj-airi/stage-ui/domains/perception'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -25,6 +26,7 @@ const emit = defineEmits<{
 }>()
 
 const consentConfirmed = defineModel<boolean>('consentConfirmed', { default: false })
+const samplingRate = defineModel<PerceptionSamplingRate>('samplingRate', { required: true })
 const { t } = useI18n()
 const isBusy = computed(() => props.status.state === 'starting' || props.status.state === 'stopping')
 const hasRemoteOwner = computed(() => props.remoteStatuses.length > 0)
@@ -71,6 +73,19 @@ const analyzerNames = ['mediapipe', 'opencv', 'yolo'] as const
       </div>
     </div>
 
+    <label mt-4 block text-xs font-medium for="local-camera-sampling-rate">
+      {{ t('tamagotchi.stage.perception-camera.sampling-rate') }}
+    </label>
+    <select
+      id="local-camera-sampling-rate"
+      v-model.number="samplingRate"
+      mt-1 w-full border border-neutral-300 rounded-xl bg-transparent px-3 py-2 text-sm dark:border-neutral-700
+    >
+      <option v-for="rate in PERCEPTION_SAMPLING_RATES" :key="rate" :value="rate">
+        {{ t('tamagotchi.stage.perception-camera.sampling-rate-option', { rate }) }}
+      </option>
+    </select>
+
     <label v-if="status.state !== 'running'" mt-4 flex items-start gap-2 text-xs :class="hasRemoteOwner ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'">
       <input v-model="consentConfirmed" type="checkbox" mt-0.5 :disabled="hasRemoteOwner">
       <span>{{ t('tamagotchi.stage.perception-camera.consent') }}</span>
@@ -82,7 +97,7 @@ const analyzerNames = ['mediapipe', 'opencv', 'yolo'] as const
 
     <div v-if="status.state === 'running' || status.state === 'paused'" grid grid-cols-2 mt-3 gap-2 text-xs>
       <div rounded-lg bg-neutral-500:7 p-2>
-        {{ t('tamagotchi.stage.perception-camera.capture-profile') }}
+        {{ t('tamagotchi.stage.perception-camera.capture-profile', { rate: status.samplingRate }) }}
       </div>
       <div rounded-lg bg-neutral-500:7 p-2>
         {{ t('tamagotchi.stage.perception-camera.capture-counts', { observations: status.observationCount, dropped: status.droppedFrameCount, facts: status.acceptedFactCount }) }}

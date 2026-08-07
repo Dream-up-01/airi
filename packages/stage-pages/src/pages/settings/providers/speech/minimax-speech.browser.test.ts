@@ -1,12 +1,26 @@
 import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
 import { useSpeechOutputRoutingStore } from '@proj-airi/stage-ui/stores/speech-output-routing'
 import { createPinia } from 'pinia'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-vue'
 import { createI18n } from 'vue-i18n'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
 import MiniMaxSpeechSettings from './minimax-speech.vue'
+
+const mocks = vi.hoisted(() => ({
+  quiesce: vi.fn(),
+}))
+
+vi.mock('../../../../composables/use-local-voice-service-switch', async () => {
+  const actual = await vi.importActual<typeof import('../../../../composables/use-local-voice-service-switch')>(
+    '../../../../composables/use-local-voice-service-switch',
+  )
+  return {
+    ...actual,
+    quiesceVoiceRuntimeForSwitch: mocks.quiesce,
+  }
+})
 
 function testI18n() {
   return createI18n({
@@ -96,6 +110,11 @@ async function renderSettings(voiceId: string) {
   return { pinia, screen }
 }
 
+beforeEach(() => {
+  mocks.quiesce.mockReset()
+  mocks.quiesce.mockResolvedValue({ ok: true, timedOut: false })
+})
+
 afterEach(() => {
   localStorage.clear()
   vi.unstubAllGlobals()
@@ -128,5 +147,24 @@ describe('miniMax speech settings', () => {
     await expect.element(screen.getByText('Voice stale-voice is unavailable.')).toBeVisible()
 
     expect(useSpeechOutputRoutingStore(pinia).voiceConversationProfile).toBeNull()
+  })
+
+  it('keeps an explicitly imported custom voice usable when the catalog omits it', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async () => voiceCatalogResponse(['account-voice'])))
+    const { pinia, screen } = await renderSettings('imported-voice')
+    useProvidersStore(pinia).providers['minimax-speech'].customVoices = [{
+      id: 'imported-voice',
+      name: 'Imported voice',
+    }]
+
+    const activateButton = screen.getByRole('button', { name: 'Validate and use for voice calls' })
+    await activateButton.click()
+    await expect.element(screen.getByText('Voice-call speech is ready')).toBeVisible()
+
+    expect(useSpeechOutputRoutingStore(pinia).voiceConversationProfile).toEqual({
+      providerId: 'minimax-speech',
+      modelId: 'speech-2.8-hd',
+      voiceId: 'imported-voice',
+    })
   })
 })

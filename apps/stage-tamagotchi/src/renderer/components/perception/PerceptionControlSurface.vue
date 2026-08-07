@@ -42,8 +42,10 @@ const activeSourceKind = shallowRef<PerceptionSourceKind>(
 const isPausingAll = shallowRef(false)
 const cloudValidationCompleted = shallowRef(false)
 const cloudScreenSourceId = shallowRef('')
-const cloudScreenConsentConfirmed = shallowRef(false)
-const cloudCameraConsentConfirmed = shallowRef(false)
+const cloudScreenFrameConsentConfirmed = shallowRef(false)
+const cloudScreenAudioConsentConfirmed = shallowRef(false)
+const cloudCameraFrameConsentConfirmed = shallowRef(false)
+const cloudCameraAudioConsentConfirmed = shallowRef(false)
 const hasActiveSources = computed(() => perception.status.value.state === 'running'
   || cameraPerception.status.value.state === 'running'
   || qwenCloudPerception.screenStatus.value.captureState === 'running'
@@ -64,14 +66,14 @@ watch(() => cameraPerception.status.value.state, (state) => {
     cameraConsentConfirmed.value = false
 })
 
-watch(() => qwenCloudPerception.screenStatus.value.captureState, (state) => {
-  if (state === 'idle' || state === 'failed')
-    cloudScreenConsentConfirmed.value = false
+watch(() => [qwenCloudPerception.screenStatus.value.captureState, qwenCloudPerception.screenStatus.value.state] as const, ([captureState, state]) => {
+  if (captureState === 'idle' || captureState === 'paused' || captureState === 'failed' || state === 'stopping' || state === 'failed')
+    clearCloudScreenConsent()
 })
 
-watch(() => qwenCloudPerception.cameraStatus.value.captureState, (state) => {
-  if (state === 'idle' || state === 'failed')
-    cloudCameraConsentConfirmed.value = false
+watch(() => [qwenCloudPerception.cameraStatus.value.captureState, qwenCloudPerception.cameraStatus.value.state] as const, ([captureState, state]) => {
+  if (captureState === 'idle' || captureState === 'paused' || captureState === 'failed' || state === 'stopping' || state === 'failed')
+    clearCloudCameraConsent()
 })
 
 // A deep link that arrives while this surface is already mounted must still move
@@ -110,6 +112,56 @@ async function stopCamera(): Promise<void> {
   cameraConsentConfirmed.value = false
 }
 
+function clearCloudScreenConsent(): void {
+  cloudScreenFrameConsentConfirmed.value = false
+  cloudScreenAudioConsentConfirmed.value = false
+}
+
+function clearCloudCameraConsent(): void {
+  cloudCameraFrameConsentConfirmed.value = false
+  cloudCameraAudioConsentConfirmed.value = false
+}
+
+async function pauseCloudScreen(): Promise<void> {
+  clearCloudScreenConsent()
+  try {
+    await qwenCloudPerception.pauseScreen()
+  }
+  finally {
+    clearCloudScreenConsent()
+  }
+}
+
+async function stopCloudScreen(): Promise<void> {
+  clearCloudScreenConsent()
+  try {
+    await qwenCloudPerception.stopScreen()
+  }
+  finally {
+    clearCloudScreenConsent()
+  }
+}
+
+async function pauseCloudCamera(): Promise<void> {
+  clearCloudCameraConsent()
+  try {
+    await qwenCloudPerception.pauseCamera()
+  }
+  finally {
+    clearCloudCameraConsent()
+  }
+}
+
+async function stopCloudCamera(): Promise<void> {
+  clearCloudCameraConsent()
+  try {
+    await qwenCloudPerception.stopCamera()
+  }
+  finally {
+    clearCloudCameraConsent()
+  }
+}
+
 function selectSourceKind(kind: PerceptionSourceKind): void {
   activeSourceKind.value = kind
   if (kind === 'screen' && perception.sources.value.length === 0)
@@ -130,9 +182,9 @@ async function pauseAll(): Promise<void> {
     if (cameraPerception.status.value.state === 'running')
       pending.push(cameraPerception.pause())
     if (qwenCloudPerception.screenStatus.value.captureState === 'running')
-      pending.push(qwenCloudPerception.pauseScreen())
+      pending.push(pauseCloudScreen())
     if (qwenCloudPerception.cameraStatus.value.captureState === 'running')
-      pending.push(qwenCloudPerception.pauseCamera())
+      pending.push(pauseCloudCamera())
     if (minecraftStore.perceptionEnabled && !minecraftStore.perceptionPaused)
       pending.push(minecraftPerception.pause())
     await Promise.all(pending)
@@ -155,10 +207,12 @@ async function validateCloud(): Promise<void> {
 
 async function stopCloud(): Promise<void> {
   cloudValidationCompleted.value = false
-  await qwenCloudPerception.stopScreen()
-  await qwenCloudPerception.stopCamera()
-  cloudScreenConsentConfirmed.value = false
-  cloudCameraConsentConfirmed.value = false
+  clearCloudScreenConsent()
+  clearCloudCameraConsent()
+  await Promise.allSettled([
+    qwenCloudPerception.stopScreen(),
+    qwenCloudPerception.stopCamera(),
+  ])
   await qwenCloudControl.stop()
 }
 </script>
@@ -195,6 +249,7 @@ async function stopCloud(): Promise<void> {
       v-if="activeSourceKind === 'screen'"
       v-model:selected-source-id="selectedSourceId"
       v-model:consent-confirmed="consentConfirmed"
+      :sampling-rate="perception.samplingRate.value"
       :sources="perception.sources.value"
       :status="perception.status.value"
       :refreshing="perception.isRefreshingSources.value"
@@ -209,10 +264,12 @@ async function stopCloud(): Promise<void> {
       @confirm-fact="perception.confirmFact"
       @retract-fact="perception.retractFact"
       @clear-facts="perception.clearFacts"
+      @update:sampling-rate="perception.setSamplingRate"
     />
     <LocalCameraPerceptionPanel
       v-else-if="activeSourceKind === 'camera'"
       v-model:consent-confirmed="cameraConsentConfirmed"
+      :sampling-rate="cameraPerception.samplingRate.value"
       :status="cameraPerception.status.value"
       :remote-statuses="cameraPerception.remoteStatuses.value"
       :observability="cameraPerception.observability.value"
@@ -222,13 +279,18 @@ async function stopCloud(): Promise<void> {
       @confirm-fact="cameraPerception.confirmFact"
       @retract-fact="cameraPerception.retractFact"
       @clear-facts="cameraPerception.clearFacts"
+      @update:sampling-rate="cameraPerception.setSamplingRate"
     />
     <MinecraftPerceptionPanel v-else-if="activeSourceKind === 'minecraft'" />
     <CloudPerceptionPolicyPanel
       v-else
       v-model:selected-screen-source-id="cloudScreenSourceId"
-      v-model:screen-consent-confirmed="cloudScreenConsentConfirmed"
-      v-model:camera-consent-confirmed="cloudCameraConsentConfirmed"
+      v-model:screen-frame-consent-confirmed="cloudScreenFrameConsentConfirmed"
+      v-model:screen-audio-consent-confirmed="cloudScreenAudioConsentConfirmed"
+      v-model:camera-frame-consent-confirmed="cloudCameraFrameConsentConfirmed"
+      v-model:camera-audio-consent-confirmed="cloudCameraAudioConsentConfirmed"
+      :screen-sampling-rate="perception.samplingRate.value"
+      :camera-sampling-rate="cameraPerception.samplingRate.value"
       :status="qwenCloudControl.status.value"
       :loading="qwenCloudControl.isLoading.value"
       :error-code="qwenCloudControl.lastErrorCode.value"
@@ -242,12 +304,14 @@ async function stopCloud(): Promise<void> {
       @stop="stopCloud"
       @refresh-screen-sources="qwenCloudPerception.refreshScreenSources"
       @start-screen="qwenCloudPerception.startScreen"
-      @pause-screen="qwenCloudPerception.pauseScreen"
-      @stop-screen="qwenCloudPerception.stopScreen"
+      @pause-screen="pauseCloudScreen"
+      @stop-screen="stopCloudScreen"
       @start-camera="qwenCloudPerception.startCamera"
-      @pause-camera="qwenCloudPerception.pauseCamera"
-      @stop-camera="qwenCloudPerception.stopCamera"
+      @pause-camera="pauseCloudCamera"
+      @stop-camera="stopCloudCamera"
       @camera-privacy-mode="qwenCloudPerception.setCameraPrivacyMode"
+      @update:screen-sampling-rate="perception.setSamplingRate"
+      @update:camera-sampling-rate="cameraPerception.setSamplingRate"
     />
   </div>
 </template>

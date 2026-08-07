@@ -358,10 +358,9 @@ export function createLocalVoiceServiceManager(
 export function setupLocalVoiceServiceManager(options: LocalVoiceServiceManagerOptions = {}) {
   const manager = createLocalVoiceServiceManager(options)
   onAppBeforeQuit(() => manager.stopAll())
-  // SenseVoice is the conservative cold-start fallback selected by the main
-  // renderer. Starting it here keeps ownership in the Electron manager so a
-  // later same-class ASR switch can close it without killing arbitrary
-  // loopback processes. start() is deduplicated if settings opens meanwhile.
-  void manager.start('sensevoice')
+  // The main process does not own renderer-local provider persistence. The
+  // Stage renderer reconciles the selected local ASR after Pinia restores it;
+  // starting a guessed service here could leave Qwen running while another
+  // provider is selected.
   return manager
 }

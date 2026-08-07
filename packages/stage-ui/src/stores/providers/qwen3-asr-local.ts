@@ -166,6 +166,31 @@ function pcm16ChunkToFloat32(chunk: AudioChunk) {
   return output
 }
 
+async function readAudioChunk(
+  reader: ReadableStreamDefaultReader<AudioChunk>,
+  signal?: AbortSignal,
+) {
+  throwIfAborted(signal)
+
+  let abortHandler: (() => void) | undefined
+  if (signal) {
+    abortHandler = () => {
+      void reader.cancel(signal.reason).catch(() => undefined)
+    }
+    signal.addEventListener('abort', abortHandler, { once: true })
+  }
+
+  try {
+    const result = await reader.read()
+    throwIfAborted(signal)
+    return result
+  }
+  finally {
+    if (signal && abortHandler)
+      signal.removeEventListener('abort', abortHandler)
+  }
+}
+
 async function decodeFileToFloat32(file: Blob) {
   const context = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE })
   try {
@@ -189,8 +214,7 @@ async function* qwenAudioChunks(options: Qwen3AsrLocalStreamOptions): AsyncGener
     const reader = options.inputAudioStream.getReader()
     try {
       while (true) {
-        throwIfAborted(options.abortSignal)
-        const { done, value } = await reader.read()
+        const { done, value } = await readAudioChunk(reader, options.abortSignal)
         if (done)
           break
         if (value)

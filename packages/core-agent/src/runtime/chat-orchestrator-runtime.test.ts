@@ -526,6 +526,60 @@ describe('createChatOrchestratorRuntime', () => {
     }])
   })
 
+  it('aborts active LLM sends and ignores late assistant output after cancellation', async () => {
+    const harness = createHarness()
+    const ttsLiterals: string[] = []
+    const ttsCompletionTexts: string[] = []
+    let receivedOptions: StreamOptions | undefined
+    let releaseStream: (() => void) | undefined
+
+    harness.runtime.hooks.onTokenLiteral(async (literal) => {
+      ttsLiterals.push(literal)
+    })
+    harness.runtime.hooks.onAssistantResponseEnd(async (message) => {
+      ttsCompletionTexts.push(message)
+    })
+    harness.stream.mockImplementationOnce(async (_model, _chatProvider, _messages, options) => {
+      receivedOptions = options
+      await new Promise<void>((resolve) => {
+        releaseStream = resolve
+      })
+
+      // Model adapters can race cancellation and invoke callbacks after the
+      // caller has already aborted the transport. The runtime must ignore them.
+      await options?.onStreamEvent?.({ type: 'text-delta', text: 'late assistant output that must not reach speech' })
+      await options?.onStreamEvent?.({ type: 'finish', finishReason: 'stop' })
+    })
+
+    const send = harness.runtime.ingest('interrupt this turn', {
+      model: 'gpt-test',
+      chatProvider: provider,
+      input: {
+        type: 'input:text',
+        data: {
+          text: 'interrupt this turn',
+        },
+      },
+    })
+
+    await vi.waitFor(() => {
+      expect(receivedOptions?.abortSignal).toBeDefined()
+    })
+
+    harness.runtime.cancelActiveSends('session-1', 'voice-interrupt')
+    expect(receivedOptions?.abortSignal?.aborted).toBe(true)
+
+    releaseStream?.()
+    await send
+
+    expect(harness.sessionMessages['session-1']?.filter(message => message.role === 'assistant')).toEqual([])
+    expect(harness.assistantAppended).toEqual([])
+    expect(harness.assistantTurns).toEqual([])
+    expect(ttsLiterals).toEqual([])
+    expect(ttsCompletionTexts).toEqual([])
+    expect(harness.foregroundResets).toEqual([])
+  })
+
   it('rejects cancelled queued sends before they start', async () => {
     const harness = createHarness()
     let releaseFirstSend: (() => void) | undefined

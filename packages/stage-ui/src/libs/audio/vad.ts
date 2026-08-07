@@ -32,9 +32,16 @@ export interface VADEvents {
 
 export type VADEventCallback<K extends keyof VADEvents> = (event: VADEvents[K]) => void
 
+export interface VADProcessOptions {
+  /**
+   * Cancels work that belongs to a stopped or replaced microphone graph.
+   */
+  signal?: AbortSignal
+}
+
 export interface BaseVAD {
   initialize: () => Promise<void>
-  processAudio: (inputBuffer: Float32Array) => Promise<void>
+  processAudio: (inputBuffer: Float32Array, options?: VADProcessOptions) => Promise<void>
   on: <K extends keyof VADEvents>(event: K, callback: VADEventCallback<K>) => void
   off: <K extends keyof VADEvents>(event: K, callback: VADEventCallback<K>) => void
 }
@@ -51,17 +58,38 @@ export interface VADAudioOptions {
   minChunkSize?: number
 
   /**
+   * Maximum number of unprocessed chunks retained for the active microphone graph.
+   * Older chunks are discarded first to keep VAD responsive to live input.
+   */
+  maxQueuedChunks?: number
+
+  /**
    * VAD configuration options
    */
   vadConfig?: Partial<BaseVADConfig>
 }
 
+interface ActiveVADRun {
+  controller: AbortController
+  generation: number
+  node: AudioWorkletNode
+}
+
+interface PendingAudioChunk {
+  buffer: Float32Array
+  run: ActiveVADRun
+}
+
 export function createVADStates(vad: BaseVAD, vadAudioWorkletUrl: string, options?: VADAudioOptions) {
-  let audioWorkletNode: AudioWorkletNode | null
-  let mediaStream: MediaStream | null
-  let sourceNode: MediaStreamAudioSourceNode | null
-  let silentGainNode: GainNode | null
-  let workletInitialized: boolean
+  let audioWorkletNode: AudioWorkletNode | null = null
+  let sourceNode: MediaStreamAudioSourceNode | null = null
+  let silentGainNode: GainNode | null = null
+  let workletInitialized = false
+  let lifecycleGeneration = 0
+  let activeRun: ActiveVADRun | null = null
+  let pendingAudioChunks: PendingAudioChunk[] = []
+  let processingPromise: Promise<void> | null = null
+  let lifecycleQueue: Promise<void> = Promise.resolve()
 
   const {
     audioContextOptions = {
@@ -70,7 +98,24 @@ export function createVADStates(vad: BaseVAD, vadAudioWorkletUrl: string, option
     },
   } = options || {}
 
+  const minChunkSize = normalizeNonNegativeInteger(options?.minChunkSize, 0)
+  const maxQueuedChunks = normalizePositiveInteger(options?.maxQueuedChunks, 4)
+
   let audioContext = new AudioContext(audioContextOptions)
+
+  function normalizePositiveInteger(value: number | undefined, fallback: number) {
+    if (!Number.isFinite(value))
+      return fallback
+
+    return Math.max(1, Math.floor(value!))
+  }
+
+  function normalizeNonNegativeInteger(value: number | undefined, fallback: number) {
+    if (!Number.isFinite(value))
+      return fallback
+
+    return Math.max(0, Math.floor(value!))
+  }
 
   function resetVADState() {
     const reset = Reflect.get(vad, 'reset')
@@ -78,29 +123,80 @@ export function createVADStates(vad: BaseVAD, vadAudioWorkletUrl: string, option
       Reflect.apply(reset, vad, [])
   }
 
-  async function initialize() {
-    if (!audioContext || audioContext.state === 'closed') {
-      audioContext = new AudioContext(audioContextOptions)
-    }
+  function enqueueLifecycle(operation: () => Promise<void>) {
+    const next = lifecycleQueue.then(operation, operation)
+    lifecycleQueue = next.then(() => undefined, () => undefined)
+    return next
+  }
 
-    try {
-      if (!workletInitialized) {
-        await audioContext.audioWorklet.addModule(vadAudioWorkletUrl)
-        workletInitialized = true
-      }
+  function isActiveRun(run: ActiveVADRun) {
+    return (
+      activeRun === run
+      && audioWorkletNode === run.node
+      && lifecycleGeneration === run.generation
+      && !run.controller.signal.aborted
+    )
+  }
 
-      audioWorkletNode = new AudioWorkletNode(audioContext, 'vad-audio-worklet-processor')
-      audioWorkletNode.port.onmessage = async (event) => {
-        const { buffer } = event.data
-        if (buffer && buffer.length > 0) {
-          await vad.processAudio(new Float32Array(buffer))
-        }
+  function invalidateActiveRun() {
+    lifecycleGeneration += 1
+    activeRun?.controller.abort()
+    activeRun = null
+    pendingAudioChunks = []
+
+    return lifecycleGeneration
+  }
+
+  function cloneWorkletBuffer(buffer: unknown) {
+    if (buffer instanceof Float32Array)
+      return buffer.slice()
+
+    if (buffer instanceof ArrayBuffer)
+      return new Float32Array(buffer.slice(0))
+
+    return undefined
+  }
+
+  function scheduleAudioProcessing() {
+    if (processingPromise)
+      return
+
+    processingPromise = processQueuedAudio().finally(() => {
+      processingPromise = null
+      if (pendingAudioChunks.length > 0)
+        scheduleAudioProcessing()
+    })
+  }
+
+  async function processQueuedAudio() {
+    while (pendingAudioChunks.length > 0) {
+      const chunk = pendingAudioChunks.shift()
+      if (!chunk || !isActiveRun(chunk.run))
+        continue
+
+      try {
+        await vad.processAudio(chunk.buffer, { signal: chunk.run.controller.signal })
+      }
+      catch {
+        // The worker can fail independently from the microphone graph. Keep raw audio and
+        // provider error details out of the console, and continue processing future chunks.
       }
     }
-    catch (error) {
-      console.error('Failed to initialize audio worklet:', error)
-      throw error
-    }
+  }
+
+  function enqueueWorkletAudio(run: ActiveVADRun, rawBuffer: unknown) {
+    if (!isActiveRun(run))
+      return
+
+    const buffer = cloneWorkletBuffer(rawBuffer)
+    if (!buffer || buffer.length === 0 || buffer.length < minChunkSize || !isActiveRun(run))
+      return
+
+    while (pendingAudioChunks.length >= maxQueuedChunks)
+      pendingAudioChunks.shift()
+
+    pendingAudioChunks.push({ buffer, run })
+    scheduleAudioProcessing()
   }
 
   /**
@@ -117,59 +213,123 @@ export function createVADStates(vad: BaseVAD, vadAudioWorkletUrl: string, option
     }
   }
 
-  async function start(stream: MediaStream) {
-    if (!audioContext || !audioWorkletNode) {
-      throw new Error('Audio system not initialized. Call initialize() first.')
-    }
+  function disconnectWorkletNode() {
+    const node = audioWorkletNode
+    audioWorkletNode = null
+    if (!node)
+      return
 
-    try {
-      if (audioContext.state === 'suspended') {
-        await audioContext.resume()
-      }
-
-      // Request microphone access
-      disconnectInputGraph()
-      mediaStream = stream
-
-      // Create source node and connect to worklet
-      sourceNode = audioContext.createMediaStreamSource(mediaStream)
-      sourceNode.connect(audioWorkletNode)
-
-      // Connect worklet to a silent destination (to keep the audio graph active)
-      // Using a GainNode with gain=0 to ensure no sound is output
-      silentGainNode = audioContext.createGain()
-      silentGainNode.gain.value = 0
-      audioWorkletNode.connect(silentGainNode)
-      silentGainNode.connect(audioContext.destination)
-    }
-    catch (error) {
-      console.error('Failed to start microphone:', error)
-      throw error
-    }
+    node.port.onmessage = null
+    node.disconnect()
   }
 
-  async function stop() {
+  function teardownAudioGraph() {
     disconnectInputGraph()
-    mediaStream = null
-    resetVADState()
+    disconnectWorkletNode()
+  }
 
-    if (audioContext && audioContext.state !== 'closed')
-      await audioContext.suspend()
+  function initialize() {
+    return enqueueLifecycle(async () => {
+      if (audioContext.state === 'closed') {
+        audioContext = new AudioContext(audioContextOptions)
+        workletInitialized = false
+      }
+
+      if (workletInitialized)
+        return
+
+      try {
+        await audioContext.audioWorklet.addModule(vadAudioWorkletUrl)
+        if (audioContext.state !== 'closed')
+          workletInitialized = true
+      }
+      catch (error) {
+        console.error('Failed to initialize audio worklet:', error)
+        throw error
+      }
+    })
+  }
+
+  function start(stream: MediaStream) {
+    const replacesActiveRun = activeRun !== null
+    const generation = invalidateActiveRun()
+
+    return enqueueLifecycle(async () => {
+      if (generation !== lifecycleGeneration)
+        return
+
+      if (audioContext.state === 'closed' || !workletInitialized)
+        throw new Error('Audio system not initialized. Call initialize() first.')
+
+      teardownAudioGraph()
+      if (replacesActiveRun)
+        resetVADState()
+
+      try {
+        if (audioContext.state === 'suspended')
+          await audioContext.resume()
+
+        if (generation !== lifecycleGeneration || !workletInitialized)
+          return
+
+        const node = new AudioWorkletNode(audioContext, 'vad-audio-worklet-processor')
+        const run: ActiveVADRun = {
+          controller: new AbortController(),
+          generation,
+          node,
+        }
+
+        audioWorkletNode = node
+        activeRun = run
+        node.port.onmessage = (event) => {
+          enqueueWorkletAudio(run, event.data?.buffer)
+        }
+
+        sourceNode = audioContext.createMediaStreamSource(stream)
+        sourceNode.connect(node)
+
+        // Connect the worklet to a silent destination to keep the audio graph active.
+        silentGainNode = audioContext.createGain()
+        silentGainNode.gain.value = 0
+        node.connect(silentGainNode)
+        silentGainNode.connect(audioContext.destination)
+      }
+      catch (error) {
+        if (generation === lifecycleGeneration) {
+          activeRun?.controller.abort()
+          activeRun = null
+          pendingAudioChunks = []
+          teardownAudioGraph()
+          resetVADState()
+        }
+
+        console.error('Failed to start microphone:', error)
+        throw error
+      }
+    })
+  }
+
+  function stop() {
+    invalidateActiveRun()
+
+    return enqueueLifecycle(async () => {
+      teardownAudioGraph()
+      resetVADState()
+
+      if (audioContext.state !== 'closed')
+        await audioContext.suspend()
+    })
   }
 
   function dispose() {
-    disconnectInputGraph()
+    invalidateActiveRun()
+    teardownAudioGraph()
     resetVADState()
-    if (audioWorkletNode) {
-      audioWorkletNode.disconnect()
-      audioWorkletNode = null
-    }
+
     // The MediaStream is owned by the caller (settings audio device store). VAD only borrows it
     // to build an AudioNode graph, so disposing VAD must not stop the microphone device itself.
-    mediaStream = null
-    if (audioContext && audioContext.state !== 'closed') {
-      audioContext.close()
-    }
+    if (audioContext.state !== 'closed')
+      void audioContext.close()
 
     workletInitialized = false
   }

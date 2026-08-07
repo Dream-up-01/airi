@@ -187,7 +187,10 @@ def handle_shutdown(_signum, _frame) -> None:
 def parse_args():
     parser = argparse.ArgumentParser(description="AIRI Qwen3-ASR streaming bridge")
     parser.add_argument("--model", default=MODEL_ID)
-    parser.add_argument("--host", default="0.0.0.0")
+    # This bridge has no application-level authentication. Keep its network
+    # boundary on the local machine unless an operator explicitly supplies a
+    # different host when running the server directly.
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.38)
     parser.add_argument("--chunk-size-sec", type=float, default=1.0)

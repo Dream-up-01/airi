@@ -9,13 +9,14 @@ import {
   approvedQwenCloudPerceptionPolicy,
   QWEN_CLOUD_COST_BOUNDARY_ID,
   QWEN_CLOUD_ENDPOINT_REGION_ID,
+  QWEN_CLOUD_PRIVACY_PROFILE_ID,
   QWEN_CLOUD_PROVIDER_ID,
   QWEN_CLOUD_REGION_ID,
   QWEN_FLASH_REALTIME_MODEL_ID,
   QWEN_PLUS_REALTIME_MODEL_ID,
 } from '@proj-airi/stage-ui/domains/perception'
 
-export const QWEN_CLOUD_CONTROL_VERSION = 'perception-cloud-control/v0.3' as const
+export const QWEN_CLOUD_CONTROL_VERSION = 'perception-cloud-control/v0.4' as const
 export const QWEN_CLOUD_GRANT_VERSION = 'perception-cloud-grant/v0.3' as const
 
 export interface QwenCloudControlRequest {
@@ -35,7 +36,11 @@ export interface QwenCloudControlStatus extends QwenCloudControlRequest {
   responseControl: 'manual'
   outputMode: 'text-encoded-objective-json'
   localRetention: 'none'
-  providerRetention: 'shortest-available-no-training'
+  providerPrivacyProfileId: typeof QWEN_CLOUD_PRIVACY_PROFILE_ID
+  providerRetention: 'service-logs-one-month'
+  providerDataUse: 'not-used-for-training-improvement-evaluation-or-human-review'
+  providerDataBoundary: 'cn-mainland-no-cross-region-or-cross-border'
+  sessionContextRetention: 'cleared-on-disconnect'
   proactiveReactions: false
   workspaceConfigured: boolean
   apiKeyConfigured: boolean
@@ -59,17 +64,17 @@ export type QwenCloudControlStatusParseResult
 export const electronQwenCloudControlStatus = defineInvokeEventa<
   QwenCloudControlStatus,
   QwenCloudControlRequest
->('eventa:invoke:electron:perception:qwen-cloud:status:v0.3')
+>('eventa:invoke:electron:perception:qwen-cloud:status:v0.4')
 
 export const electronQwenCloudControlValidate = defineInvokeEventa<
   QwenCloudControlStatus,
   QwenCloudControlRequest
->('eventa:invoke:electron:perception:qwen-cloud:validate:v0.3')
+>('eventa:invoke:electron:perception:qwen-cloud:validate:v0.4')
 
 export const electronQwenCloudControlStop = defineInvokeEventa<
   QwenCloudControlStatus,
   QwenCloudControlRequest
->('eventa:invoke:electron:perception:qwen-cloud:stop:v0.3')
+>('eventa:invoke:electron:perception:qwen-cloud:stop:v0.4')
 
 export interface QwenCloudGrantRegisterRequest {
   contractVersion: typeof QWEN_CLOUD_GRANT_VERSION
@@ -172,7 +177,10 @@ export function parseQwenCloudControlStatus(input: unknown): QwenCloudControlSta
     'outputMode',
     'proactiveReactions',
     'providerClientAvailable',
+    'providerDataBoundary',
+    'providerDataUse',
     'providerId',
+    'providerPrivacyProfileId',
     'providerRetention',
     'providerRetentionVerified',
     'regionId',
@@ -180,6 +188,7 @@ export function parseQwenCloudControlStatus(input: unknown): QwenCloudControlSta
     'responseControl',
     'screenEscalationModelId',
     'screenResidentModelId',
+    'sessionContextRetention',
     'state',
     'uploadActive',
     'workspaceConfigured',
@@ -199,7 +208,11 @@ export function parseQwenCloudControlStatus(input: unknown): QwenCloudControlSta
     || input.responseControl !== 'manual'
     || input.outputMode !== 'text-encoded-objective-json'
     || input.localRetention !== 'none'
-    || input.providerRetention !== 'shortest-available-no-training'
+    || input.providerPrivacyProfileId !== QWEN_CLOUD_PRIVACY_PROFILE_ID
+    || input.providerRetention !== 'service-logs-one-month'
+    || input.providerDataUse !== 'not-used-for-training-improvement-evaluation-or-human-review'
+    || input.providerDataBoundary !== 'cn-mainland-no-cross-region-or-cross-border'
+    || input.sessionContextRetention !== 'cleared-on-disconnect'
     || input.proactiveReactions !== false
     || !isBoolean(input.workspaceConfigured)
     || !isBoolean(input.apiKeyConfigured)
@@ -245,7 +258,11 @@ export function createQwenCloudControlStatus(input: {
     responseControl: 'manual',
     outputMode: 'text-encoded-objective-json',
     localRetention: 'none',
-    providerRetention: 'shortest-available-no-training',
+    providerPrivacyProfileId: approvedQwenCloudPerceptionPolicy.providerPrivacyProfileId,
+    providerRetention: approvedQwenCloudPerceptionPolicy.providerRetention,
+    providerDataUse: approvedQwenCloudPerceptionPolicy.providerDataUse,
+    providerDataBoundary: approvedQwenCloudPerceptionPolicy.providerDataBoundary,
+    sessionContextRetention: approvedQwenCloudPerceptionPolicy.sessionContextRetention,
     proactiveReactions: false,
     workspaceConfigured: input.workspaceConfigured,
     apiKeyConfigured: input.apiKeyConfigured,

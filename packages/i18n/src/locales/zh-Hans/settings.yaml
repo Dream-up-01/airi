@@ -460,6 +460,7 @@ pages:
         invalid_artistry_json: 'Error: Artistry provider options contains invalid JSON.'
       none: None
     modules: 模块
+    name: 名称
     name_asc: 名称 (A-Z)
     name_desc: 名称 (Z-A)
     character_source_import:
@@ -870,7 +871,7 @@ pages:
       voice-conversation:
         preferences:
           title: 语音对话
-          description: 麦克风轮次的安全运行时偏好；尚未支持的模式保持不可用。
+          description: 麦克风轮次和回声保护打断的安全运行时偏好。
           mode: 对话模式
           interruption-policy: 打断策略
           vad-threshold: VAD 阈值
@@ -885,7 +886,7 @@ pages:
         interruptions:
           disabled: 关闭
           push: 点击打断
-          vad-unavailable: VAD 自动插话（缺少回声保护时不可用）
+          vad: VAD 自动插话（已启用回声保护；请在你的麦克风上验证）
         local-asr:
           title: 本地 ASR 模型切换
           description: Qwen 停止时也会显示；只有在你点击后才启动本地服务，并在健康验证通过后切换。
@@ -911,7 +912,9 @@ pages:
             unexpected: 切换本地 ASR 时发生错误，已保留原模型。
           notices:
             previous-service-not-managed: 旧服务不是由当前 AIRI 会话启动，因此没有强制关闭；如仍在运行，请手动关闭其终端。
-            previous-service-stop-failed: 新模型已切换成功，但旧本地服务未能关闭，请手动关闭其终端。
+            previous-service-stop-failed: 旧本地服务未能关闭，因此未切换模型；请手动关闭其终端后重试。
+            runtime-quiesce-failed: 当前语音运行时未能干净停止，因此未切换本地 ASR。
+            runtime-quiesce-timeout: 当前语音运行时未确认停止请求，因此未切换本地 ASR。
         diagnostics:
           title: 语音诊断
           description: 仅显示运行时能力和延迟摘要，不显示转写正文或音频内容。
@@ -979,7 +982,9 @@ pages:
           unexpected: 切换语音 Provider 时发生错误，已保留原 Provider。
         notices:
           previous-service-not-managed: 旧服务不是由当前 AIRI 会话启动，因此没有强制关闭；如仍在运行，请手动关闭其终端。
-          previous-service-stop-failed: 新 Provider 已切换成功，但旧本地服务未能关闭，请手动关闭其终端。
+          previous-service-stop-failed: 旧本地服务未能关闭，因此未切换 Provider；请手动关闭其终端后重试。
+          runtime-quiesce-failed: 当前语音运行时未能干净停止，因此未发布新的语音设置。
+          runtime-quiesce-timeout: 当前语音运行时未确认停止请求，因此未发布新的语音设置。
       sections:
         section:
           playground:
@@ -1329,6 +1334,8 @@ pages:
           validate_and_activate_button: 验证并设为流式 ASR
           starting_button: 正在启动 Qwen3-ASR…
           activation_failed: Qwen3-ASR 已启动，但未通过流式健康检查。
+          runtime_quiesce_failed: 当前语音运行时未能干净停止，因此未启用 Qwen3-ASR。
+          runtime_quiesce_timeout: 当前语音运行时未确认停止请求，因此未启用 Qwen3-ASR。
           start_errors:
             desktop_required: 只有 AIRI 桌面版可以启动此本地服务。
             launcher_missing: 当前 AIRI 安装中缺少 Qwen3-ASR 启动程序。
@@ -1367,6 +1374,8 @@ pages:
           validate_and_activate_button: 启动、验证并设为中文语音识别
           starting_button: 正在启动 SenseVoice…
           activation_failed: SenseVoice 已启动，但未通过健康检查。
+          runtime_quiesce_failed: 当前语音运行时未能干净停止，因此未启用 SenseVoice。
+          runtime_quiesce_timeout: 当前语音运行时未确认停止请求，因此未启用 SenseVoice。
           start_errors:
             desktop_required: 只有 AIRI 桌面版可以启动此本地服务。
             launcher_missing: 当前 AIRI 安装中缺少 SenseVoice 启动程序。
@@ -1580,6 +1589,7 @@ pages:
           title: 实验平台
           validation:
             error-missing-api-key: 需要填写 API Key 才能用哦！
+            error-playback: 生成的音频无法播放。
         title: ElevenLabs (11labs)
       kokoro-local:
         description: 基于 Kokoro-82M 的本地语音合成

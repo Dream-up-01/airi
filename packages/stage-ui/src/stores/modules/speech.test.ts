@@ -4,7 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { applyVoiceStyleToProviderConfig, deriveVoiceStyleDirective, hasNumericProsody, voiceStyleCapabilitiesForProvider } from '../../domains/voiceConversation/style'
 import { OFFICIAL_SPEECH_PROVIDER_ID, OFFICIAL_SPEECH_STREAMING_PROVIDER_ID, providerOfficialSpeech } from '../../libs/providers/providers/official'
 import { useProvidersStore } from '../providers'
-import { toSignedPercent, useSpeechStore } from './speech'
+import {
+  DEFAULT_SPEECH_PROVIDER_ID,
+  toSignedPercent,
+  useSpeechStore,
+} from './speech'
 
 const i18nState = vi.hoisted(() => ({
   locale: { value: 'en-US' },
@@ -34,6 +38,15 @@ describe('speech store helpers', () => {
 
   it('formats zero as 0%', () => {
     expect(toSignedPercent(0)).toBe('0%')
+  })
+
+  it('starts with the MiniMax Firefly output profile', () => {
+    const speechStore = useSpeechStore()
+
+    expect(DEFAULT_SPEECH_PROVIDER_ID).toBe('minimax-speech')
+    expect(speechStore.activeSpeechProvider).toBe('minimax-speech')
+    expect(speechStore.activeSpeechModel).toBe('speech-2.8-turbo')
+    expect(speechStore.activeSpeechVoiceId).toBe('AiriFireflyCN20260710_2011R7')
   })
 
   /**

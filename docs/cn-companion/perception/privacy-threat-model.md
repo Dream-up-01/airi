@@ -46,4 +46,4 @@
 
 ## 残余风险与发布阻塞
 
-真实 Electron IPC 二进制 transport、OpenCV.js 4.13.0 与 YOLOX-Nano ONNX 的来源/license/hash/实体摄像头运行均已验证。本地 Screen/Camera 保持 production-ready；Qwen main-only gateway、独立帧/麦克风 grant、共享 capture、预算账本和 stop/revoke cleanup 已生产接线，但控制台最短保留/不用于训练尚未确认，因此云上传 fail-closed。主动情境反应按用户决定保持关闭。剩余外部发布阻塞只有受控 Qwen 真实 Provider 验收和真实已认证 Minecraft 服务端运行，不得因 mock/targeted tests 通过而扩大声明。
+真实 Electron IPC 二进制 transport、OpenCV.js 4.13.0 与 YOLOX-Nano ONNX 的来源/license/hash/实体摄像头运行均已验证。本地 Screen/Camera 保持 production-ready；Qwen main-only gateway、独立帧/麦克风 grant、共享 capture、预算账本和 stop/revoke cleanup 已生产接线。2026-07-27 阿里云官方售后已确认服务日志留存一个月、断连立即清除模型会话上下文、不用于训练/改进/评估或人工审阅，以及中国内地 Endpoint 不跨地域或跨境；cloud policy/control v0.4 已严格传递这些独立字段，readiness 证据标记可绑定日期化 Profile 配置。断连清除上下文不得解释为删除一个月服务日志；“各种日志”的精确载荷范围和能否缩短留存仍未知，采用所有已授权云媒体/响应可能进入一月日志的保守披露。主动情境反应按用户决定保持关闭。剩余外部发布阻塞只有受控、付费 Qwen 真实 Provider 验收和真实 PCL/Fabric Provider 运行；client-only Mod 可在单人世界验收，PCL/离线用户名/游戏服务器身份不能代替 AIRI 配对与授权。不得因政策已确认或 mock/targeted tests 通过而扩大声明。

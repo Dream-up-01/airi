@@ -73,6 +73,58 @@ describe('local camera perception coordinator', () => {
     expect(projections.at(-1)).toBeNull()
   })
 
+  it('replaces the scheduler timer when the target sampling rate changes', async () => {
+    const capture = createCapture()
+    const intervals: number[] = []
+    let timerId = 0
+    const clearInterval = vi.fn()
+    const coordinator = createCoordinator(capture, {
+      setInterval: (_callback, intervalMs) => {
+        intervals.push(intervalMs)
+        return ++timerId as unknown as ReturnType<typeof setInterval>
+      },
+      clearInterval,
+    })
+
+    await coordinator.start(true)
+    const sessionBefore = coordinator.status.sessionId
+    const generationBefore = coordinator.status.generation
+    expect(coordinator.status.samplingRate).toBe(10)
+    expect(intervals.at(-1)).toBe(100)
+
+    coordinator.setSamplingRate(30)
+
+    expect(coordinator.status.samplingRate).toBe(30)
+    expect(coordinator.status.sessionId).toBe(sessionBefore)
+    expect(coordinator.status.generation).toBe(generationBefore)
+    expect(capture.open).toHaveBeenCalledOnce()
+    expect(clearInterval).toHaveBeenCalledOnce()
+    expect(intervals.at(-1)).toBe(34)
+    await coordinator.stop()
+    expect(clearInterval).toHaveBeenCalledTimes(2)
+  })
+
+  it('caps OpenCV admission at 10 frames per second when sampling is set to 30 Hz', async () => {
+    const capture = createCapture()
+    const openCvAnalyze = vi.fn(async (_imageData: ImageData, observedAt: number) => ({
+      observedAt,
+      meanLuminance: 120,
+      laplacianVariance: 50,
+      motionRatio: 0.1,
+      visiblePixelRatio: 1,
+    }))
+    const coordinator = createCoordinator(capture, {
+      createOpenCv: () => ({ analyze: openCvAnalyze, dispose: () => undefined }),
+    })
+
+    await coordinator.start(true)
+    coordinator.setSamplingRate(30)
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(openCvAnalyze.mock.calls.length).toBeLessThanOrEqual(10)
+    await coordinator.stop()
+  })
+
   it('keeps local camera running when YOLO WebGPU is unavailable and reports degradation', async () => {
     const capture = createCapture()
     const coordinator = createCoordinator(capture, {
@@ -117,21 +169,9 @@ describe('local camera perception coordinator', () => {
     await coordinator.stop()
   })
 
-  // Found by code review 2026-07-26 (M2/M3 follow-up review)
-  //
-  // ROOT CAUSE:
-  // #startRun() opens the camera stream first and only assigns this.#run after
-  // `await mediaPipe.init(...)` resolves. stop() and pause() both bailed out
-  // with `if (!this.#run) return`, so a stop issued during that initialization
-  // window (MediaPipe model download/warm-up, seconds on a cold start) did
-  // nothing: it reported 'idle' while #startRun kept going, published #run,
-  // armed the 100ms capture timer and left the camera track — and its hardware
-  // indicator light — running for a session the user had already cancelled.
-  //
-  // We fixed this by recording the pending stop/pause request, re-checking it in
-  // #startRun right after this.#run becomes observable, and taking the regular
-  // teardown path (which stops the capture handle and disposes the analyzers)
-  // before the capture timer is armed.
+  // The capture lifecycle becomes active before MediaPipe initialization
+  // settles, so stop/pause must retire that scoped lifecycle without waiting
+  // for a non-cancellable model initialization promise.
   it('releases the camera when stop() lands while MediaPipe is still initializing', async () => {
     const capture = createCapture()
     const initGate = createInitGate()
@@ -185,6 +225,102 @@ describe('local camera perception coordinator', () => {
     expect(coordinator.status.state).toBe('paused')
   })
 
+  it('stops promptly and starts a replacement while old MediaPipe initialization remains pending', async () => {
+    const initGate = createInitGate()
+    const firstMediaPipeDispose = vi.fn(async () => undefined)
+    const handleStops: Array<ReturnType<typeof vi.fn>> = []
+    const capture: CameraCaptureRuntime = {
+      open: vi.fn(async (sourceId) => {
+        const stop = vi.fn()
+        handleStops.push(stop)
+        return { sourceId, stop, onEnded: () => () => undefined }
+      }),
+      captureFrame: vi.fn(() => ({
+        capturedAt: Date.now(),
+        imageData: new TestImageData(new Uint8ClampedArray(640 * 360 * 4), 640, 360) as unknown as ImageData,
+        video: {} as HTMLVideoElement,
+      })),
+    }
+    let mediaPipeCount = 0
+    const coordinator = createCoordinator(capture, {
+      createMediaPipe: () => {
+        mediaPipeCount += 1
+        return mediaPipeCount === 1
+          ? { ...createMediaPipe(), init: () => initGate.wait(), dispose: firstMediaPipeDispose }
+          : createMediaPipe()
+      },
+    })
+
+    const firstStart = coordinator.start(true, 'mixed')
+    await vi.waitFor(() => {
+      expect(capture.open).toHaveBeenCalledOnce()
+      expect(mediaPipeCount).toBe(1)
+    })
+    await initGate.entered
+
+    const beforeStop = performance.now()
+    const stopped = await coordinator.stop()
+    const stopLatencyMs = performance.now() - beforeStop
+    const firstStartStatus = await firstStart
+    const replacement = await coordinator.start(true, 'mixed')
+
+    expect(stopLatencyMs).toBeLessThan(500)
+    expect(stopped.state).toBe('idle')
+    expect(firstStartStatus.state).toBe('stopping')
+    expect(replacement).toMatchObject({ state: 'running', processingMode: 'mixed' })
+    expect(handleStops).toHaveLength(2)
+    expect(handleStops[0]).toHaveBeenCalledOnce()
+    expect(handleStops[1]).not.toHaveBeenCalled()
+
+    const replacementSessionId = replacement.sessionId
+    initGate.open()
+    await vi.waitFor(() => expect(firstMediaPipeDispose).toHaveBeenCalled())
+
+    expect(coordinator.status).toMatchObject({ state: 'running', sessionId: replacementSessionId, processingMode: 'mixed' })
+    expect(handleStops[1]).not.toHaveBeenCalled()
+    await coordinator.stop()
+    expect(handleStops[1]).toHaveBeenCalledOnce()
+  })
+
+  it('detaches an aborted mixed start and keeps its late MediaPipe result away from the replacement', async () => {
+    const capture = createCapture()
+    const initGate = createInitGate()
+    const firstMediaPipeDispose = vi.fn(async () => undefined)
+    let mediaPipeCount = 0
+    const coordinator = createCoordinator(capture, {
+      createMediaPipe: () => {
+        mediaPipeCount += 1
+        return mediaPipeCount === 1
+          ? { ...createMediaPipe(), init: () => initGate.wait(), dispose: firstMediaPipeDispose }
+          : createMediaPipe()
+      },
+    })
+    const controller = new AbortController()
+    const firstStart = coordinator.start(true, 'mixed', controller.signal)
+    await initGate.entered
+
+    const beforeAbort = performance.now()
+    controller.abort('cloud-stop')
+    const cancelled = await firstStart
+    const abortLatencyMs = performance.now() - beforeAbort
+    const replacement = await coordinator.start(true, 'mixed')
+
+    expect(abortLatencyMs).toBeLessThan(500)
+    expect(cancelled.state).toBe('stopping')
+    expect(replacement).toMatchObject({ state: 'running', processingMode: 'mixed' })
+    expect(capture.open).toHaveBeenCalledTimes(2)
+    expect(capture.stop).toHaveBeenCalledOnce()
+
+    const replacementSessionId = replacement.sessionId
+    initGate.open()
+    await vi.waitFor(() => expect(firstMediaPipeDispose).toHaveBeenCalled())
+
+    expect(coordinator.status).toMatchObject({ state: 'running', sessionId: replacementSessionId, processingMode: 'mixed' })
+    expect(capture.stop).toHaveBeenCalledOnce()
+    await coordinator.stop()
+    expect(capture.stop).toHaveBeenCalledTimes(2)
+  })
+
   it('atomically revokes facts and prevents disposed analyzer callbacks from changing paused state', async () => {
     const capture = createCapture()
     const snapshots: Array<{ acceptedFactIds: string[] }> = []
@@ -204,10 +340,57 @@ describe('local camera perception coordinator', () => {
     expect(coordinator.status.analyzers).toEqual({ mediapipe: 'stopped', opencv: 'stopped', yolo: 'stopped' })
     expect(snapshots.at(-1)?.acceptedFactIds).toEqual([])
   })
+
+  it('attempts every active cleanup and retracts published state when individual cleanups fail', async () => {
+    const capture = createCapture()
+    const clearInterval = vi.fn(() => {
+      throw new Error('timer-cleanup-failed')
+    })
+    const mediaPipeDispose = vi.fn(async () => {
+      throw new Error('mediapipe-cleanup-failed')
+    })
+    const openCvDispose = vi.fn(() => {
+      throw new Error('opencv-cleanup-failed')
+    })
+    const yoloDispose = vi.fn(async () => {
+      throw new Error('yolo-cleanup-failed')
+    })
+    const snapshots: Array<{ acceptedFactIds: string[] }> = []
+    const observability: Array<PerceptionObservabilitySnapshot | null> = []
+    const projections: unknown[] = []
+    const coordinator = createCoordinator(capture, {
+      clearInterval,
+      createMediaPipe: () => ({ ...createMediaPipe(), dispose: mediaPipeDispose }),
+      createOpenCv: () => ({ ...createOpenCv(), dispose: openCvDispose }),
+      createYolo: () => ({ ...createYolo(), dispose: yoloDispose }),
+      onSnapshot: (snapshot) => {
+        snapshots.push(snapshot)
+        if (snapshot.acceptedFactIds.length === 0)
+          throw new Error('snapshot-cleanup-failed')
+      },
+      onObservability: snapshot => observability.push(snapshot),
+      onProjection: projection => projections.push(projection),
+    })
+
+    await coordinator.start(true)
+    await vi.advanceTimersByTimeAsync(800)
+    expect(coordinator.status.acceptedFactCount).toBeGreaterThan(0)
+
+    await expect(coordinator.stop()).resolves.toMatchObject({ state: 'idle', acceptedFactCount: 0 })
+
+    expect(clearInterval).toHaveBeenCalledOnce()
+    expect(capture.stop).toHaveBeenCalledOnce()
+    expect(mediaPipeDispose).toHaveBeenCalledOnce()
+    expect(openCvDispose).toHaveBeenCalledOnce()
+    expect(yoloDispose).toHaveBeenCalledOnce()
+    expect(snapshots.at(-1)?.acceptedFactIds).toEqual([])
+    expect(observability.at(-1)).toBeNull()
+    expect(projections.at(-1)).toBeNull()
+  })
 })
 
 function createCoordinator(
-  capture: ReturnType<typeof createCapture>,
+  capture: CameraCaptureRuntime,
   overrides: Partial<ConstructorParameters<typeof LocalCameraPerceptionCoordinator>[0]> = {},
 ) {
   let sequence = 0

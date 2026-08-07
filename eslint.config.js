@@ -28,8 +28,10 @@ export default defineConfig({
     '**/drizzle/**',
     '**/.astro/**',
     '.agents/**',
+    '.hermes-control/binary-metadata.json',
     '.github/**',
     'CLAUDE.md', // Skip the symbolic link
+    'IMPROVE.md',
   ],
 }, {
   rules: {

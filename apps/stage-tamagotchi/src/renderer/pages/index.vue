@@ -16,6 +16,7 @@ import {
   useElectronMouseInWindow,
   useElectronRelativeMouse,
 } from '@proj-airi/electron-vueuse'
+import { startLocalVoiceService, stopLocalVoiceService } from '@proj-airi/stage-pages/composables/use-local-voice-service-start'
 import { IS_DEV } from '@proj-airi/stage-shared'
 import { useModelStore, useThreeSceneIsTransparentAtPoint } from '@proj-airi/stage-ui-three'
 import { HoloCoupon } from '@proj-airi/stage-ui/components'
@@ -28,7 +29,10 @@ import { useCanvasPixelIsTransparentAtPoint } from '@proj-airi/stage-ui/composab
 import { recoverSpeechOutputProfile } from '@proj-airi/stage-ui/domains/speechRouting'
 import {
   createAsrTranscriptAccumulator,
+  createVadBargeInGateState,
   createVoicePlaybackEchoGateState,
+  DEFAULT_VAD_BARGE_IN_CONFIRMATION_MS,
+  evaluateVadBargeIn,
   isVoicePlaybackEchoBlocked,
   normalizeAsrTranscript,
   reduceAsrTranscriptSegment,
@@ -42,6 +46,7 @@ import {
   onVoiceRuntimeDiagnosticsRequested,
   publishVoiceRuntimeDiagnostics,
 } from '@proj-airi/stage-ui/services/voice-runtime-diagnostics'
+import { onVoiceRuntimeQuiesceRequested } from '@proj-airi/stage-ui/services/voice-runtime-quiesce'
 import { onVoiceSettingsChanged } from '@proj-airi/stage-ui/services/voice-settings-sync'
 import { useVAD } from '@proj-airi/stage-ui/stores/ai/models/vad'
 import { useSpeakingStore } from '@proj-airi/stage-ui/stores/audio'
@@ -52,11 +57,14 @@ import { useSpeechStore } from '@proj-airi/stage-ui/stores/modules/speech'
 import { useOnboardingStore } from '@proj-airi/stage-ui/stores/onboarding'
 import {
   GPT_SOVITS_LOCAL_PROVIDER_ID,
+  QWEN3_ASR_LOCAL_DEFAULT_BASE_URL,
   QWEN3_ASR_LOCAL_PROVIDER_ID,
-  SENSEVOICE_LOCAL_DEFAULT_MODEL,
+  SENSEVOICE_LOCAL_DEFAULT_BASE_URL,
   SENSEVOICE_LOCAL_PROVIDER_ID,
   useProvidersStore,
 } from '@proj-airi/stage-ui/stores/providers'
+import { normalizeQwen3AsrLocalBaseUrl } from '@proj-airi/stage-ui/stores/providers/qwen3-asr-local'
+import { normalizeSenseVoiceLocalBaseUrl } from '@proj-airi/stage-ui/stores/providers/sensevoice-local'
 import { useSettings, useSettingsAudioDevice } from '@proj-airi/stage-ui/stores/settings'
 import { useSpeechOutputControlStore } from '@proj-airi/stage-ui/stores/speech-output-control'
 import { useSpeechOutputRoutingStore } from '@proj-airi/stage-ui/stores/speech-output-routing'
@@ -294,17 +302,13 @@ const {
   configured: hearingConfigured,
 } = storeToRefs(hearingStore)
 
-// Qwen3-ASR and GPT-SoVITS are deliberately session-activated. A marker in
-// sessionStorage prevents renderer reloads from undoing a choice made during
-// the current desktop session while still restoring cold-start defaults after
-// the Electron window is recreated.
+// GPT-SoVITS is deliberately session-activated. A marker in sessionStorage
+// prevents renderer reloads from undoing a choice made during the current
+// desktop session while still restoring cold-start defaults after the Electron
+// window is recreated. Qwen3-ASR is the standard ASR default and is never
+// replaced by SenseVoice during renderer startup.
 const localVoiceStartupDefaultsMarker = 'airi/local-voice-startup-defaults-applied'
 const shouldApplyLocalVoiceStartupDefaults = sessionStorage.getItem(localVoiceStartupDefaultsMarker) !== 'true'
-if (shouldApplyLocalVoiceStartupDefaults && activeTranscriptionProvider.value === QWEN3_ASR_LOCAL_PROVIDER_ID) {
-  activeTranscriptionProvider.value = SENSEVOICE_LOCAL_PROVIDER_ID
-  activeTranscriptionModel.value = SENSEVOICE_LOCAL_DEFAULT_MODEL
-  hearingStore.activeCustomModelName = SENSEVOICE_LOCAL_DEFAULT_MODEL
-}
 const hearingPipeline = useHearingSpeechInputPipeline()
 const { transcribeForRecording, transcribeForMediaStream, stopStreamingTranscription } = hearingPipeline
 const { error: hearingError, finalizesOnVadEnd, supportsStreamInput } = storeToRefs(hearingPipeline)
@@ -321,6 +325,48 @@ const {
 } = storeToRefs(speechStore)
 const speechOutputRoutingStore = useSpeechOutputRoutingStore()
 const providersStore = useProvidersStore()
+
+type ManagedLocalAsrService = 'qwen3-asr' | 'sensevoice'
+
+function managedLocalAsrServiceForProvider(providerId: string | undefined, baseUrl: unknown): ManagedLocalAsrService | undefined {
+  if (providerId === QWEN3_ASR_LOCAL_PROVIDER_ID
+    && normalizeQwen3AsrLocalBaseUrl(baseUrl) === QWEN3_ASR_LOCAL_DEFAULT_BASE_URL) {
+    return 'qwen3-asr'
+  }
+  if (providerId === SENSEVOICE_LOCAL_PROVIDER_ID
+    && normalizeSenseVoiceLocalBaseUrl(baseUrl) === SENSEVOICE_LOCAL_DEFAULT_BASE_URL) {
+    return 'sensevoice'
+  }
+  return undefined
+}
+
+/**
+ * Reconcile renderer-persisted ASR selection with the Electron-owned process.
+ * The main process cannot safely infer this value from renderer localStorage.
+ */
+async function reconcileLocalAsrService() {
+  const providerId = activeTranscriptionProvider.value
+  const providerConfig = providersStore.getProviderConfig(providerId)
+  const desiredService = managedLocalAsrServiceForProvider(providerId, providerConfig?.baseUrl)
+  const services: ManagedLocalAsrService[] = ['qwen3-asr', 'sensevoice']
+
+  for (const serviceId of services) {
+    if (serviceId !== desiredService) {
+      const stopResult = await stopLocalVoiceService(serviceId)
+      if (!stopResult.ok) {
+        throw new Error('local-asr-service-stop-failed')
+      }
+    }
+  }
+
+  if (desiredService) {
+    const startResult = await startLocalVoiceService(desiredService)
+    if (!startResult.ok) {
+      throw new Error(`local-asr-service-start-failed:${startResult.errorCode}`)
+    }
+  }
+}
+
 const activeSpeechProviderConfig = providersStore.getProviderConfig(activeSpeechProvider.value)
 const recoveredVoiceOutputProfile = recoverSpeechOutputProfile({
   currentProfile: speechOutputRoutingStore.profileFor('voice-conversation').profile,
@@ -454,6 +500,12 @@ watch(voiceProviderSnapshot, (next, previous) => {
   void handleVoiceProviderSwitch(next)
 }, { deep: true })
 
+watch(() => voiceConversationPreferences.value.interruptionPolicy, (policy) => {
+  if (policy !== 'vadBargeIn')
+    resetVadBargeInGate()
+  void syncAutomaticVoiceInputWithPlayback()
+})
+
 watch(microphonePermission, (permission) => {
   if (permission.state === 'requesting') {
     voiceConversationStore.beginPermissionRequest({
@@ -575,7 +627,13 @@ const voiceStatusToneClass = computed(() => {
 })
 
 const VAD_SAMPLE_RATE = 16_000
-const { init: initVAD, dispose: disposeVAD, start: startVAD, stop: stopVAD } = useVAD(workletUrl, {
+const {
+  init: initVAD,
+  dispose: disposeVAD,
+  isSpeech: vadSpeechActive,
+  start: startVAD,
+  stop: stopVAD,
+} = useVAD(workletUrl, {
   threshold: () => voiceConversationPreferences.value.vadThreshold,
   minSilenceDurationMs: () => voiceConversationPreferences.value.trailingSilenceMs,
   minSpeechDurationMs: () => voiceConversationPreferences.value.minSpeechDurationMs,
@@ -604,11 +662,35 @@ let activeVoiceInputStream: MediaStream | undefined
 let asrFirstPartialTurnId: string | undefined
 let voiceProviderSwitchGeneration = 0
 let voiceInterruptGeneration = 0
+let vadBargeInMonitoring = false
+let vadBargeInTimer: ReturnType<typeof setTimeout> | undefined
+let vadBargeInGeneration = 0
+let vadBargeInState = createVadBargeInGateState()
+
+async function cancelActiveVoiceChat(reason: 'voice-interrupt' | 'provider-switch' | 'user-stop' | 'page-dispose') {
+  try {
+    await chatSyncStore.requestCancel({
+      sessionId: activeChatSessionId.value || undefined,
+      reason,
+    })
+  }
+  catch (error) {
+    // The local stage can still stop its own playback/ASR resources if the
+    // authority renderer has already gone away. Do not treat this control-plane
+    // timeout as a user-facing chat failure or retain a recovery draft.
+    console.warn('[Main Page] Chat cancellation acknowledgement was unavailable.', {
+      reason,
+      errorName: safeRuntimeErrorName(error),
+    })
+  }
+}
 
 async function handleVoiceProviderSwitch(next: typeof voiceProviderSnapshot.value) {
   const generation = ++voiceProviderSwitchGeneration
   voiceRecoveryDraftStore.clear()
+  await cancelActiveVoiceChat('provider-switch')
   speechOutputControlStore.requestStopSpeaking('provider-switch')
+  resetVadBargeInGate()
   streamingAsrGeneration += 1
   activeAsrTranscript.value = null
   asrFirstPartialTurnId = undefined
@@ -616,7 +698,10 @@ async function handleVoiceProviderSwitch(next: typeof voiceProviderSnapshot.valu
   voiceConversationStore.applyProviderSwitch({ ...next, now: Date.now() })
 
   await Promise.allSettled([
-    enqueueVadLifecycle(stopVAD),
+    enqueueVadLifecycle(async () => {
+      await stopVAD()
+      vadBargeInMonitoring = false
+    }),
     enqueueStreamingAsrLifecycle(async () => {
       await stopStreamingTranscription(true)
     }),
@@ -1050,7 +1135,70 @@ function handleStreamingSpeechEnd(text: string) {
   void consumeFinalAsrTranscript('streaming-asr', text, 'stream', turnId)
 }
 
+function isAssistantPlaybackActive() {
+  return nowSpeaking.value || voiceConversationStore.state === 'speaking'
+}
+
+function clearVadBargeInTimer() {
+  vadBargeInGeneration += 1
+  if (vadBargeInTimer) {
+    clearTimeout(vadBargeInTimer)
+    vadBargeInTimer = undefined
+  }
+}
+
+function resetVadBargeInCandidate() {
+  clearVadBargeInTimer()
+  vadBargeInState = {
+    ...vadBargeInState,
+    candidateStartedAt: null,
+  }
+}
+
+function resetVadBargeInGate() {
+  resetVadBargeInCandidate()
+  vadBargeInState = createVadBargeInGateState()
+}
+
+function armVadBargeIn() {
+  if (voiceConversationPreferences.value.interruptionPolicy !== 'vadBargeIn' || !isAssistantPlaybackActive())
+    return false
+
+  const evaluation = evaluateVadBargeIn({
+    state: vadBargeInState,
+    playbackActive: true,
+    speechActive: true,
+    at: Date.now(),
+  })
+  vadBargeInState = evaluation.state
+
+  if (evaluation.action !== 'arm' || vadBargeInTimer)
+    return true
+
+  const generation = ++vadBargeInGeneration
+  vadBargeInTimer = setTimeout(() => {
+    vadBargeInTimer = undefined
+    if (generation !== vadBargeInGeneration)
+      return
+
+    const confirmation = evaluateVadBargeIn({
+      state: vadBargeInState,
+      playbackActive: isAssistantPlaybackActive(),
+      speechActive: vadSpeechActive.value,
+      at: Date.now(),
+    })
+    vadBargeInState = confirmation.state
+    if (confirmation.action === 'interrupt') {
+      void interruptVoiceConversation('vad-barge-in')
+    }
+  }, DEFAULT_VAD_BARGE_IN_CONFIRMATION_MS)
+  return true
+}
+
 async function handleSpeechStart() {
+  if (isAssistantPlaybackActive() && armVadBargeIn())
+    return
+
   if (shouldIgnoreAutomaticVoiceInput()) {
     console.info('[Main Page] Ignoring VAD speech start while assistant playback is active')
     return
@@ -1108,8 +1256,9 @@ async function waitForAssistantPlaybackToStop(requestId: number, timeoutMs = 2_5
   })
 }
 
-async function interruptVoiceConversation() {
+async function interruptVoiceConversation(source: 'push-to-interrupt' | 'vad-barge-in' = 'push-to-interrupt') {
   const generation = ++voiceInterruptGeneration
+  await cancelActiveVoiceChat('voice-interrupt')
   const stopRequestId = speechOutputControlStore.requestStopSpeaking('voice-interrupt')
   activeAsrTranscript.value = null
 
@@ -1130,20 +1279,39 @@ async function interruptVoiceConversation() {
 
   clearEchoGateResumeTimer()
   voicePlaybackEchoGate.value = releaseVoicePlaybackEchoGateForUserInterrupt()
-  startVoiceListeningSession(currentVoiceMode.value)
-  await resumeAutomaticVoiceInputAfterPlayback()
+  const preserveVadSpeech = source === 'vad-barge-in' && vadSpeechActive.value && vadBargeInMonitoring
+  if (preserveVadSpeech) {
+    // The VAD graph already owns the user's current speech segment. Promote it
+    // into a fresh turn after playback stops instead of forcing the user to
+    // repeat the first words spoken during barge-in confirmation.
+    startVoiceListeningSession(currentVoiceMode.value)
+    beginVoiceTurn(currentVoiceMode.value)
+  }
+  else {
+    startVoiceListeningSession(currentVoiceMode.value)
+  }
+  await resumeAutomaticVoiceInputAfterPlayback({ preserveVadSpeech })
 }
 
 async function handleSpeechEnd() {
+  resetVadBargeInCandidate()
+
   if (shouldUseStreamInput.value) {
     const turnId = activeAsrTranscript.value?.turnId
     if (turnId && voiceConversationStore.isCurrentTurn(turnId))
       voiceConversationStore.dispatch({ type: 'speech-end', turnId })
 
     if (finalizesOnVadEnd.value) {
+      let finalText: string | undefined
       await enqueueStreamingAsrLifecycle(async () => {
-        await stopStreamingTranscription(false)
+        // Qwen3-ASR finalizes only after the input stream is closed. Closing the
+        // session advances its generation, so the stream reader intentionally
+        // drops its late callback; consume the authoritative result returned by
+        // the teardown instead.
+        finalText = await stopStreamingTranscription(false)
       })
+      if (turnId)
+        await consumeFinalAsrTranscript('streaming-asr', finalText ?? '', 'stream', turnId)
     }
     return
   }
@@ -1221,7 +1389,7 @@ async function startStreamingAsr(currentStream: MediaStream) {
 }
 
 async function suspendAutomaticVoiceInputForPlayback() {
-  if (automaticVoiceInputSuspended)
+  if (automaticVoiceInputSuspended && !vadBargeInMonitoring)
     return
 
   automaticVoiceInputSuspended = true
@@ -1230,7 +1398,10 @@ async function suspendAutomaticVoiceInputForPlayback() {
   console.info('[Main Page] Suspending automatic voice input for assistant playback echo control')
 
   await Promise.allSettled([
-    enqueueVadLifecycle(stopVAD),
+    enqueueVadLifecycle(async () => {
+      await stopVAD()
+      vadBargeInMonitoring = false
+    }),
     enqueueStreamingAsrLifecycle(async () => {
       await stopStreamingTranscription(true)
     }),
@@ -1238,7 +1409,30 @@ async function suspendAutomaticVoiceInputForPlayback() {
   activeVoiceInputStream = undefined
 }
 
-async function resumeAutomaticVoiceInputAfterPlayback() {
+async function prepareVadBargeInMonitoring() {
+  if (automaticVoiceInputSuspended && vadBargeInMonitoring)
+    return
+
+  automaticVoiceInputSuspended = true
+  streamingAsrGeneration += 1
+  activeAsrTranscript.value = null
+
+  await enqueueStreamingAsrLifecycle(async () => {
+    await stopStreamingTranscription(true)
+  })
+
+  await enqueueVadLifecycle(async () => {
+    if (!stream.value || !isAssistantPlaybackActive())
+      return
+    if (!vadBargeInMonitoring) {
+      await startVAD(stream.value)
+      vadBargeInMonitoring = true
+    }
+    activeVoiceInputStream = stream.value
+  })
+}
+
+async function resumeAutomaticVoiceInputAfterPlayback(options: { preserveVadSpeech?: boolean } = {}) {
   if (!enabled.value || !stream.value || voiceRecoveryDraft.value || isVoicePlaybackEchoBlocked(voicePlaybackEchoGate.value))
     return
 
@@ -1252,7 +1446,10 @@ async function resumeAutomaticVoiceInputAfterPlayback() {
     await enqueueVadLifecycle(async () => {
       if (!stream.value || isVoicePlaybackEchoBlocked(voicePlaybackEchoGate.value))
         return
-      await startVAD(stream.value)
+      if (!options.preserveVadSpeech || !vadBargeInMonitoring || !vadSpeechActive.value) {
+        await startVAD(stream.value)
+        vadBargeInMonitoring = true
+      }
       if (voiceConversationStore.state === 'listening')
         voiceConversationStore.dispatch({ type: 'vad-started' })
       activeVoiceInputStream = stream.value
@@ -1276,7 +1473,15 @@ async function syncAutomaticVoiceInputWithPlayback() {
   })
 
   if (voicePlaybackEchoGate.value.audiblePlayback || voicePlaybackEchoGate.value.assistantResponseActive) {
-    await suspendAutomaticVoiceInputForPlayback()
+    if (voiceConversationPreferences.value.interruptionPolicy === 'vadBargeIn'
+      && enabled.value
+      && stream.value
+      && !voiceRecoveryDraft.value) {
+      await prepareVadBargeInMonitoring()
+    }
+    else {
+      await suspendAutomaticVoiceInputForPlayback()
+    }
     return
   }
 
@@ -1309,6 +1514,11 @@ async function startAudioInteraction() {
   try {
     console.info('[Main Page] Starting audio interaction...')
 
+    // The main process cannot read renderer-local provider persistence. Reconcile
+    // before opening VAD/ASR so a persisted local provider has a managed service
+    // ready, while custom loopback endpoints remain user-owned.
+    await reconcileLocalAsrService()
+
     await vadLifecycle.catch(() => undefined)
     await initVAD()
 
@@ -1318,6 +1528,7 @@ async function startAudioInteraction() {
       await enqueueVadLifecycle(async () => {
         if (stream.value && !isVoicePlaybackEchoBlocked(voicePlaybackEchoGate.value)) {
           await startVAD(stream.value)
+          vadBargeInMonitoring = true
           if (voiceConversationStore.state === 'listening')
             voiceConversationStore.dispatch({ type: 'vad-started' })
           activeVoiceInputStream = stream.value
@@ -1373,6 +1584,7 @@ async function startAudioInteraction() {
 function cleanupAudioInteraction() {
   tryCatch(() => {
     clearEchoGateResumeTimer()
+    resetVadBargeInGate()
     streamingAsrGeneration += 1
     audioInteractionStarting.value = false
     automaticVoiceInputSuspended = false
@@ -1384,16 +1596,35 @@ function cleanupAudioInteraction() {
     })
     void enqueueVadLifecycle(async () => {
       await stopVAD()
+      vadBargeInMonitoring = false
       disposeVAD()
     })
   })
 }
 
-function stopAudioInteraction(reason: 'user-stop' | 'page-dispose' = 'user-stop') {
+function stopAudioInteraction(reason: 'user-stop' | 'provider-switch' | 'page-dispose' = 'user-stop') {
+  void cancelActiveVoiceChat(reason)
   voiceRecoveryDraftStore.clear()
   voiceConversationStore.stop(reason)
   cleanupAudioInteraction()
 }
+
+// Settings lives in a separate renderer. It must quiesce the active Stage
+// before publishing a new provider/model/voice so an in-flight turn cannot
+// capture the new profile while old TTS/ASR resources are still alive.
+const stopVoiceRuntimeQuiesceRequest = onVoiceRuntimeQuiesceRequested(async () => {
+  const stopRequestId = speechOutputControlStore.requestStopSpeaking('provider-switch')
+  stopAudioInteraction('provider-switch')
+
+  const playbackStopped = await waitForAssistantPlaybackToStop(stopRequestId, 1_000)
+  await Promise.allSettled([
+    streamingAsrLifecycle,
+    vadLifecycle,
+  ])
+
+  if (!playbackStopped)
+    throw new Error('voice-runtime-playback-did-not-quiesce')
+})
 
 watch(enabled, async (val) => {
   console.info('[Main Page] Audio enabled changed:', val, 'stream available:', !!stream.value)
@@ -1442,6 +1673,7 @@ onBeforeUnmount(() => {
 onUnmounted(() => {
   stopVoiceSettingsSync()
   stopVoiceDiagnosticsRequest()
+  stopVoiceRuntimeQuiesceRequest()
   stopAudioInteraction('page-dispose')
 })
 
@@ -1550,7 +1782,7 @@ const cursorPosition = computed(() => ({
                 type="button"
                 class="rounded-lg bg-primary-600 px-2.5 py-1 text-xs text-white font-medium transition-colors hover:bg-primary-500"
                 :aria-label="t('tamagotchi.stage.voice.actions.interrupt')"
-                @click.stop="interruptVoiceConversation"
+                @click.stop="() => interruptVoiceConversation()"
               >
                 {{ t('tamagotchi.stage.voice.actions.interrupt') }}
               </button>

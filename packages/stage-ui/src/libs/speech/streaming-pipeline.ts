@@ -137,6 +137,9 @@ export function createStreamingTtsPipeline(options: StreamingTtsPipelineOptions)
    * the handshake hasn't completed yet).
    */
   const beforeOpenQueue: string[] = []
+  let beforeOpenQueueBytes = 0
+  const maxBeforeOpenQueueFrames = 64
+  const maxBeforeOpenQueueBytes = 64 * 1024
   /** Binary chunks accumulated since the last sentence flush. */
   let chunks: ArrayBuffer[] = []
   let chunkBytes = 0
@@ -175,7 +178,23 @@ export function createStreamingTtsPipeline(options: StreamingTtsPipelineOptions)
       return
     }
     if (ws.readyState === WebSocket.CONNECTING) {
+      const payloadBytes = payload.length
+      // A slow handshake must not turn token arrival into an unbounded
+      // latency/memory queue. Keep the newest bounded window; once the socket
+      // opens the provider still receives the control tail (`finish` or
+      // `cancel`) even if old text frames had to be discarded.
+      if (payloadBytes > maxBeforeOpenQueueBytes)
+        return
+
+      while (beforeOpenQueue.length >= maxBeforeOpenQueueFrames
+        || beforeOpenQueueBytes + payloadBytes > maxBeforeOpenQueueBytes) {
+        const dropped = beforeOpenQueue.shift()
+        if (dropped === undefined)
+          break
+        beforeOpenQueueBytes -= dropped.length
+      }
       beforeOpenQueue.push(payload)
+      beforeOpenQueueBytes += payloadBytes
     }
     // CLOSING/CLOSED — drop silently; caller will see onDone shortly.
   }
@@ -250,6 +269,7 @@ export function createStreamingTtsPipeline(options: StreamingTtsPipelineOptions)
     for (const payload of beforeOpenQueue)
       ws.send(payload)
     beforeOpenQueue.length = 0
+    beforeOpenQueueBytes = 0
   })
 
   ws.addEventListener('message', (e) => {

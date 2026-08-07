@@ -46,6 +46,18 @@ Treat this service as a local-development and trusted-server tool only.
 
 5. The bot should automatically connect to both AIRI and the Minecraft server.
 
+### Guarded AIRI player control
+
+Structured AIRI control is disabled by default. To opt in for one bot-process session, add this to `services/minecraft/.env.local` before starting the service:
+
+```dotenv
+MINECRAFT_AGENT_CONTROL_ENABLED=true
+```
+
+This opt-in grants only the low-risk allowlist (`look-at`, movement/follow, jump, bounded chat, and hotbar selection). Held-item use is high-risk because the equipped item can have destructive effects; the executor adapter exists, but production input cannot approve or execute it without a future authenticated approval control plane. Unstructured Spark action text fails closed and does not fall back to the legacy Brain action path.
+
+PCL/offline-mode player names are not treated as authenticated consent or approval identities. Stop or disconnect destroys the session grant; changing the opt-in requires restarting the service.
+
 ## Cognitive Architecture
 
 AIRI's Minecraft agent is built on a **four-layered cognitive architecture** inspired by cognitive science, enabling reactive, conscious, and physically grounded behaviors.

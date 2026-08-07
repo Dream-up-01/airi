@@ -114,6 +114,11 @@ export class MinecraftPairingManager implements ModulePairingProvider {
     return this.devices().some(device => device.deviceId === identity.deviceId && device.publicKey === identity.publicKey)
   }
 
+  /** Only the AIRI Minecraft module opts into device-bound pairing. */
+  requiresPairing(target: { name: string, identity: { extension: { id: string } } }): boolean {
+    return target.identity.extension.id === 'airi-mc-connect'
+  }
+
   requestApproval(request: ModulePairingApprovalRequest): Promise<boolean> {
     const existing = this.pending.get(request.requestId)
     if (existing)

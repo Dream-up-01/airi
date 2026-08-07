@@ -33,13 +33,13 @@
 - [x] 同 ID 替换警告和开发态 Prompt section 来源预览
 - [x] 重启后可禁用 companion 并恢复激活前角色
 - [x] 英文和简体中文 UI 文案
+- [x] `stage-pages` 共享导入 UI 的 Vitest browser/component 回归测试，并接入 `pnpm test:run`
 
 ## 尚未通过的 M1 发布门槛
 
 - [ ] 在声明的 Provider/模型矩阵上执行 `acceptance-v0.1.md` 并记录结果
 - [ ] 人工完成原生文件选择、激活、重启恢复和回滚的端到端验收
 - [ ] 人工验证禁用后不残留 companion 动态 Prompt，并补充发布记录
-- [ ] 为 `stage-pages` 共享导入 UI 建立 Vitest browser/component 回归测试
 
 ## 已知边界
 

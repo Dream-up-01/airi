@@ -74,6 +74,9 @@ export class Mineflayer extends EventEmitter<EventHandlers> {
     this.connectionSupervisor = createConnectionSupervisor({
       logger: this.logger,
       reconnect: this.options.reconnect,
+      beforeCleanup: async () => {
+        await this.pluginRuntime.beforeCleanup()
+      },
       replaceBot: async () => {
         await this.replaceBot()
       },
@@ -220,6 +223,8 @@ export class Mineflayer extends EventEmitter<EventHandlers> {
     const forwardDisconnect = (reason: string): void => {
       if (this.isStopping || bot !== this.bot)
         return
+
+      this.ready = false
 
       if (disconnectForwarded) {
         this.logger.withFields({ reason }).log('Disconnect ignored: already handling current bot disconnect')

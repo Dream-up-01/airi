@@ -130,26 +130,16 @@ describe('local voice service manager', () => {
     expect(spawnProcess).toHaveBeenCalledTimes(1)
   })
 
-  it('starts the managed SenseVoice fallback during desktop setup', async () => {
-    const child = fakeChild()
-    const spawnProcess = vi.fn(() => child)
-    const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(healthResponse({ ok: false }, false))
-      .mockResolvedValue(healthResponse({ ok: true, model: 'SenseVoiceSmall' }))
-    const manager = setupLocalVoiceServiceManager({
-      fetchImpl: fetchImpl as typeof fetch,
+  it('does not guess a local ASR during desktop setup', async () => {
+    const spawnProcess = vi.fn()
+    setupLocalVoiceServiceManager({
+      fetchImpl: vi.fn(async () => healthResponse({ ok: false }, false)) as typeof fetch,
       fileExists: () => true,
-      pollIntervalMs: 0,
-      projectRoot: 'D:/project',
       spawnProcess: spawnProcess as unknown as typeof import('node:child_process').spawn,
     })
 
-    await expect(manager.start('sensevoice')).resolves.toEqual({
-      ok: true,
-      serviceId: 'sensevoice',
-      alreadyRunning: false,
-    })
-    expect(spawnProcess).toHaveBeenCalledTimes(1)
+    await Promise.resolve()
+    expect(spawnProcess).not.toHaveBeenCalled()
   })
 
   // Found by code review 2026-07-26 (M2 voice review)

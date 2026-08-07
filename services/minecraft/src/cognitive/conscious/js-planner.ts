@@ -544,19 +544,14 @@ function copyForIsolate<T>(value: T): T {
 
 // NOTICE:
 // `bot`/`mineflayer` are live socket-backed objects that cannot cross the sandbox
-// boundary, so they are exposed to scripts only through the `botCall` bridge below.
-// This denylist blocks methods that would tear down the connection or hijack the
-// event bus; everything else on the bot is allowed (open-by-default).
-const BOT_METHOD_DENYLIST = new Set([
-  'end',
-  'quit',
-  'on',
-  'once',
-  'off',
-  'addListener',
-  'removeListener',
-  'removeAllListeners',
-  'emit',
+// boundary, so scripts receive only the bounded low-level operations that do not
+// already have a dedicated action. Chat and lifecycle/socket methods are excluded.
+const BOT_METHOD_ALLOWLIST = new Set([
+  'clearControlStates',
+  'deactivateItem',
+  'lookAt',
+  'setQuickBarSlot',
+  'swingArm',
 ])
 
 /**
@@ -587,7 +582,7 @@ function marshalBotArg(value: unknown): unknown {
  * - A script needs a low-level bot action that has no dedicated tool (e.g. `lookAt`).
  *
  * Expects:
- * - `method` is not in {@link BOT_METHOD_DENYLIST} and resolves to a bot function.
+ * - `method` is in {@link BOT_METHOD_ALLOWLIST} and resolves to a bot function.
  * - `rawArgs` are sandbox-serializable; position-shaped args are marshaled to `Vec3`.
  *
  * Returns:
@@ -595,7 +590,7 @@ function marshalBotArg(value: unknown): unknown {
  *   the result is a live object that cannot be serialized back).
  */
 async function callBotMethod(mineflayer: Mineflayer, method: string, rawArgs: unknown): Promise<unknown> {
-  if (BOT_METHOD_DENYLIST.has(method))
+  if (!BOT_METHOD_ALLOWLIST.has(method))
     throw new Error(`botCall: method "${method}" is not allowed`)
 
   const bot = mineflayer.bot as unknown as Record<string, unknown>

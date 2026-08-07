@@ -5,8 +5,10 @@ import type { ProductionScreenSource } from '../../services/perception/productio
 import type { QwenCloudCameraStatus } from '../../services/perception/qwen-cloud-camera-coordinator'
 import type { QwenCloudScreenStatus } from '../../services/perception/qwen-cloud-screen-coordinator'
 import type { LocalCameraPerceptionContext } from './use-local-camera-perception'
+import type { PerceptionSamplingSettings } from './use-perception-sampling-settings'
 import type { QwenCloudControlContext } from './use-qwen-cloud-control'
 
+import { defaultPerceptionSamplingRate } from '@proj-airi/stage-ui/domains/perception'
 import {
   createVoicePlaybackEchoGateState,
   isVoicePlaybackEchoBlocked,
@@ -20,8 +22,9 @@ import { useVoiceConversationStore } from '@proj-airi/stage-ui/stores/voiceConve
 import { computed, inject, onScopeDispose, provide, shallowRef, watch } from 'vue'
 
 import { productionPerceptionOwnerProvider } from '../../services/perception/production-perception-owner'
-import { QwenCloudCameraCoordinator } from '../../services/perception/qwen-cloud-camera-coordinator'
-import { QwenCloudScreenCoordinator } from '../../services/perception/qwen-cloud-screen-coordinator'
+import { createGenerationScopedLocalCameraLease, QwenCloudCameraCoordinator } from '../../services/perception/qwen-cloud-camera-coordinator'
+import { acquireAbortableCloudMicrophone, QwenCloudScreenCoordinator } from '../../services/perception/qwen-cloud-screen-coordinator'
+import { createPerceptionSamplingSettings } from './use-perception-sampling-settings'
 
 const CLOUD_SCREEN_CONTEXT_SOURCE_ID = 'system:trusted-perception:screen-cloud'
 const CLOUD_CAMERA_CONTEXT_SOURCE_ID = 'system:trusted-perception:camera-cloud'
@@ -34,10 +37,10 @@ export interface QwenCloudPerceptionContext {
   cameraStatus: ComputedRef<QwenCloudCameraStatus>
   cameraObservability: ComputedRef<PerceptionObservabilitySnapshot | null>
   refreshScreenSources: () => Promise<void>
-  startScreen: (sourceId: string, consentConfirmed: boolean) => Promise<void>
+  startScreen: (sourceId: string, frameConsentConfirmed: boolean, audioConsentConfirmed: boolean) => Promise<void>
   pauseScreen: () => Promise<void>
   stopScreen: () => Promise<void>
-  startCamera: (consentConfirmed: boolean) => Promise<void>
+  startCamera: (frameConsentConfirmed: boolean, audioConsentConfirmed: boolean) => Promise<void>
   pauseCamera: () => Promise<void>
   stopCamera: () => Promise<void>
   setCameraPrivacyMode: (enabled: boolean) => void
@@ -45,7 +48,12 @@ export interface QwenCloudPerceptionContext {
 
 const qwenCloudPerceptionKey: InjectionKey<QwenCloudPerceptionContext> = Symbol('qwen-cloud-perception')
 
-export function provideQwenCloudPerception(control: QwenCloudControlContext, localCamera: LocalCameraPerceptionContext): QwenCloudPerceptionContext {
+export function provideQwenCloudPerception(
+  control: QwenCloudControlContext,
+  localCamera: LocalCameraPerceptionContext,
+  options: { samplingSettings?: PerceptionSamplingSettings } = {},
+): QwenCloudPerceptionContext {
+  const samplingSettings = options.samplingSettings ?? createPerceptionSamplingSettings()
   const audioDevices = useSettingsAudioDevice()
   const speaking = useSpeakingStore()
   const voiceConversation = useVoiceConversationStore()
@@ -93,29 +101,56 @@ export function provideQwenCloudPerception(control: QwenCloudControlContext, loc
 
   const coordinator = new QwenCloudScreenCoordinator({
     ownerProvider: productionPerceptionOwnerProvider,
-    acquireMicrophone: grant => audioDevices.acquirePerceptionStream(grant),
+    acquireMicrophone: (grant, signal) => acquireAbortableCloudMicrophone(audioDevices.acquirePerceptionStream(grant), signal),
     isAudioAllowed: () => !isVoicePlaybackEchoBlocked(echoGate.value),
+    samplingRate: samplingSettings.screen.value,
     onStatus: status => screenStatus.value = status,
     onProjection: syncProjection,
     onObservability: snapshot => observability.value = snapshot,
   })
   const cameraCoordinator = new QwenCloudCameraCoordinator({
     getLocalStatus: () => localCamera.status.value,
-    startLocalMixed: () => localCamera.startMixed(true),
-    stopLocal: () => localCamera.stop(),
+    startLocalMixed: async (signal) => {
+      await localCamera.startMixed(true, signal)
+      const status = localCamera.status.value
+      if (status.state !== 'running' || status.processingMode !== 'mixed' || !status.sessionId || status.generation < 1)
+        throw new Error('cloud-camera-local-lane-unavailable')
+      const lease = createGenerationScopedLocalCameraLease({
+        sessionId: status.sessionId,
+        generation: status.generation,
+        getStatus: () => localCamera.status.value,
+        stop: localCamera.stop,
+      })
+      if (signal.aborted) {
+        await lease.release()
+        throw new Error('cloud-camera-local-start-cancelled')
+      }
+      return lease
+    },
+    stopLocalGeneration: async (sessionId, generation) => {
+      await createGenerationScopedLocalCameraLease({
+        sessionId,
+        generation,
+        getStatus: () => localCamera.status.value,
+        stop: localCamera.stop,
+      }).release()
+    },
     subscribeFrames: localCamera.subscribeFrames,
-    acquireMicrophone: grant => audioDevices.acquirePerceptionStream(grant),
+    acquireMicrophone: (grant, signal) => acquireAbortableCloudMicrophone(audioDevices.acquirePerceptionStream(grant), signal),
     getPersonPresent: () => localCamera.observability.value?.facts.some(fact => fact.state === 'accepted' && fact.category === 'person.presence' && fact.safeValue === true) === true,
     isAudioAllowed: () => !isVoicePlaybackEchoBlocked(echoGate.value),
+    samplingRate: samplingSettings.camera.value,
     onStatus: status => cameraStatus.value = status,
     onProjection: syncCameraProjection,
     onObservability: snapshot => cameraObservability.value = snapshot,
   })
+  const stopScreenSamplingWatch = watch(samplingSettings.screen, rate => coordinator.setSamplingRate(rate))
+  const stopCameraSamplingWatch = watch(samplingSettings.camera, rate => cameraCoordinator.setSamplingRate(rate))
 
   watch(() => localCamera.status.value, (status) => {
     if (cameraStatus.value.captureState !== 'running')
       return
-    if (status.state !== 'running' || status.generation !== cameraStatus.value.generation)
+    if (!cameraCoordinator.isUsingLocalStatus(status))
       void cameraCoordinator.stop('source-ended')
   })
 
@@ -131,20 +166,20 @@ export function provideQwenCloudPerception(control: QwenCloudControlContext, loc
     }
   }
 
-  async function startScreen(sourceId: string, consentConfirmed: boolean): Promise<void> {
+  async function startScreen(sourceId: string, frameConsentConfirmed: boolean, audioConsentConfirmed: boolean): Promise<void> {
     if (control.status.value?.state !== 'ready') {
       screenStatus.value = { ...screenStatus.value, state: 'failed', captureState: 'failed', lastErrorCode: 'cloud-readiness-blocked' }
       return
     }
-    await coordinator.start(sourceId, consentConfirmed)
+    await coordinator.start(sourceId, frameConsentConfirmed, audioConsentConfirmed)
   }
 
-  async function startCamera(consentConfirmed: boolean): Promise<void> {
+  async function startCamera(frameConsentConfirmed: boolean, audioConsentConfirmed: boolean): Promise<void> {
     if (control.status.value?.state !== 'ready') {
       cameraStatus.value = { ...cameraStatus.value, state: 'failed', captureState: 'failed', lastErrorCode: 'cloud-readiness-blocked' }
       return
     }
-    await cameraCoordinator.start(consentConfirmed)
+    await cameraCoordinator.start(frameConsentConfirmed, audioConsentConfirmed)
   }
 
   const context: QwenCloudPerceptionContext = {
@@ -171,6 +206,8 @@ export function provideQwenCloudPerception(control: QwenCloudControlContext, loc
       clearTimeout(cameraProjectionTimer)
     chatContext.retractContextSource(CLOUD_SCREEN_CONTEXT_SOURCE_ID)
     chatContext.retractContextSource(CLOUD_CAMERA_CONTEXT_SOURCE_ID)
+    stopScreenSamplingWatch()
+    stopCameraSamplingWatch()
     void coordinator.stop('unmount')
     void cameraCoordinator.stop('unmount')
   })
@@ -191,6 +228,7 @@ function initialCameraStatus(): QwenCloudCameraStatus {
     acceptedFactCount: 0,
     resolution: '640x360',
     privacyMode: false,
+    samplingRate: defaultPerceptionSamplingRate('camera'),
   }
 }
 
@@ -213,5 +251,6 @@ function initialStatus(): QwenCloudScreenStatus {
     completedWindows: 0,
     droppedFrames: 0,
     acceptedFactCount: 0,
+    samplingRate: defaultPerceptionSamplingRate('screen'),
   }
 }

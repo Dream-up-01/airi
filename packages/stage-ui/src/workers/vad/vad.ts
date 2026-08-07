@@ -1,6 +1,6 @@
 import type { PreTrainedModel } from '@huggingface/transformers'
 
-import type { BaseVAD, BaseVADConfig, VADEventCallback, VADEvents } from '../../libs/audio/vad'
+import type { BaseVAD, BaseVADConfig, VADEventCallback, VADEvents, VADProcessOptions } from '../../libs/audio/vad'
 
 import { AutoModel, Tensor } from '@huggingface/transformers'
 
@@ -93,7 +93,11 @@ export class VAD implements BaseVAD {
   /**
    * Process audio buffer for speech detection
    */
-  public async processAudio(inputBuffer: Float32Array): Promise<void> {
+  public async processAudio(inputBuffer: Float32Array, options?: VADProcessOptions): Promise<void> {
+    const signal = options?.signal
+    if (signal?.aborted)
+      return
+
     if (!this.isReady) {
       throw new Error('VAD model is not initialized. Call initialize() first.')
     }
@@ -101,7 +105,9 @@ export class VAD implements BaseVAD {
     const wasRecording = this.isRecording
 
     // Perform VAD on the input buffer
-    const isSpeech = await this.detectSpeech(inputBuffer)
+    const isSpeech = await this.detectSpeech(inputBuffer, signal)
+    if (signal?.aborted || isSpeech === undefined)
+      return
 
     // Calculate derived constants
     const sampleRateMs = this.config.sampleRate / 1000
@@ -177,16 +183,27 @@ export class VAD implements BaseVAD {
   /**
    * Detect speech in an audio buffer
    */
-  private async detectSpeech(buffer: Float32Array): Promise<boolean> {
+  private async detectSpeech(buffer: Float32Array, signal?: AbortSignal): Promise<boolean | undefined> {
+    if (signal?.aborted)
+      return undefined
+
     const input = new Tensor('float32', buffer, [1, buffer.length])
 
-    const { stateN, output } = await (this.inferenceChain = this.inferenceChain.then(() =>
-      this.model?.({
+    const result = await (this.inferenceChain = this.inferenceChain.then(() => {
+      if (signal?.aborted)
+        return undefined
+
+      return this.model?.({
         input,
         sr: this.sampleRateTensor,
         state: this.state,
-      }),
-    ))
+      })
+    }))
+
+    if (!result || signal?.aborted)
+      return undefined
+
+    const { stateN, output } = result
 
     // Update the state
     this.state = stateN

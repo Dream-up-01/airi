@@ -6,6 +6,7 @@ import process from 'node:process'
 
 import {
   evaluateQwenCloudReadiness,
+  QWEN_CLOUD_PRIVACY_PROFILE_ID,
   QwenCloudCostLedger,
 } from '@proj-airi/stage-ui/domains/perception'
 
@@ -35,7 +36,10 @@ export class QwenCloudControlManager {
   constructor(options: QwenCloudControlManagerOptions = {}) {
     this.#getWorkspaceId = options.getWorkspaceId ?? (() => process.env.AIRI_QWEN_WORKSPACE_ID)
     this.#getApiKey = options.getApiKey ?? (() => process.env.DASHSCOPE_API_KEY)
-    this.#getProviderRetentionVerified = options.getProviderRetentionVerified ?? (() => process.env.AIRI_QWEN_RETENTION_VERIFIED === 'true')
+    this.#getProviderRetentionVerified = options.getProviderRetentionVerified ?? (() => (
+      readPrivacyEvidenceEnv('AIRI_QWEN_RETENTION_VERIFIED') === 'true'
+      && readPrivacyEvidenceEnv('AIRI_QWEN_PRIVACY_PROFILE_ID') === QWEN_CLOUD_PRIVACY_PROFILE_ID
+    ))
     this.#getModelAvailabilityVerified = options.getModelAvailabilityVerified ?? (() => process.env.AIRI_QWEN_MODELS_VERIFIED === 'true')
     this.#providerClientAvailable = options.socketFactory !== undefined || options.providerClientAvailable === true
     this.#costLedger = options.costLedger ?? new QwenCloudCostLedger()
@@ -91,4 +95,10 @@ function containsWhitespaceOrControl(value: string): boolean {
       return true
   }
   return false
+}
+
+function readPrivacyEvidenceEnv(key: 'AIRI_QWEN_RETENTION_VERIFIED' | 'AIRI_QWEN_PRIVACY_PROFILE_ID'): string | undefined {
+  const mainBuildEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+  const prefixedKey = `MAIN_VITE_${key}`
+  return process.env[key] ?? process.env[prefixedKey] ?? mainBuildEnv?.[prefixedKey]
 }

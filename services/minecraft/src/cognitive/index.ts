@@ -24,10 +24,8 @@ export function CognitiveEngine(options: CognitiveEngineOptions): MineflayerPlug
       const taskExecutor = container.resolve('taskExecutor')
       const airiBridge = container.resolve('airiBridge')
       const minecraftContextService = container.resolve('minecraftContextService')
+      const minecraftAgentCompanion = container.resolve('minecraftAgentCompanion')
       const debugService = DebugService.getInstance()
-
-      airiBridge.init()
-      minecraftContextService.init()
 
       if (config.debug.mcp) {
         mcpReplServer = new McpReplServer(brain)
@@ -67,6 +65,10 @@ export function CognitiveEngine(options: CognitiveEngineOptions): MineflayerPlug
       // Initialize task executor with mineflayer instance
       taskExecutor.setMineflayer(bot)
       await taskExecutor.initialize()
+      minecraftAgentCompanion.init(bot)
+
+      airiBridge.init()
+      minecraftContextService.init()
 
       // Type conversion
       const botWithAgents = bot as unknown as MineflayerWithAgents
@@ -153,6 +155,9 @@ export function CognitiveEngine(options: CognitiveEngineOptions): MineflayerPlug
       }
 
       if (container) {
+        const minecraftAgentCompanion = container.resolve('minecraftAgentCompanion')
+        await minecraftAgentCompanion.destroy()
+
         const minecraftContextService = container.resolve('minecraftContextService')
         minecraftContextService.destroy()
 

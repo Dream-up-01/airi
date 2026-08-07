@@ -13,6 +13,8 @@ import { LocalScreenPerceptionCoordinator } from './local-screen-perception-coor
 function harness(isResourceConstrained: () => boolean = () => false) {
   const order: string[] = []
   let timerCallback: (() => void) | undefined
+  const intervals: number[] = []
+  let timerId = 0
   const handleStop = vi.fn(() => order.push('handle-stop'))
   const frameRelease = vi.fn()
   const capture = {
@@ -98,23 +100,25 @@ function harness(isResourceConstrained: () => boolean = () => false) {
   const onProjection = vi.fn()
   const onObservability = vi.fn<(snapshot: PerceptionObservabilitySnapshot | null) => void>()
   let sequence = 0
+  const clearInterval = vi.fn()
   const coordinator = new LocalScreenPerceptionCoordinator({
     capture,
     consent,
     ownerProvider: createInMemoryPerceptionOwnerProvider(),
     id: prefix => `${prefix}:test:${++sequence}`,
     now: () => 1_000,
-    setInterval: (callback) => {
+    setInterval: (callback, intervalMs) => {
       timerCallback = callback
-      return 1 as unknown as ReturnType<typeof setInterval>
+      intervals.push(intervalMs)
+      return ++timerId as unknown as ReturnType<typeof setInterval>
     },
-    clearInterval: vi.fn(),
+    clearInterval,
     createRuntime: () => runtime,
     isResourceConstrained,
     onProjection,
     onObservability,
   })
-  return { capture, consent, coordinator, frameRelease, handleStop, onObservability, onProjection, order, runtime, tick: () => timerCallback?.() }
+  return { capture, clearInterval, consent, coordinator, frameRelease, handleStop, intervals, onObservability, onProjection, order, runtime, tick: () => timerCallback?.() }
 }
 
 describe('local screen perception coordinator', () => {
@@ -137,6 +141,29 @@ describe('local screen perception coordinator', () => {
     })
     expect(capture.open).not.toHaveBeenCalled()
     expect(runtime.validate).not.toHaveBeenCalled()
+  })
+
+  it('replaces the scheduler timer when the target sampling rate changes', async () => {
+    const { capture, clearInterval, consent, coordinator, intervals, runtime } = harness()
+    await coordinator.start({ sourceId: 'window:editor', consentConfirmed: true })
+
+    const sessionBefore = coordinator.status.sessionId
+    const generationBefore = coordinator.status.generation
+    expect(coordinator.status.samplingRate).toBe(2)
+    expect(intervals.at(-1)).toBe(500)
+
+    coordinator.setSamplingRate(5)
+
+    expect(coordinator.status.samplingRate).toBe(5)
+    expect(coordinator.status.sessionId).toBe(sessionBefore)
+    expect(coordinator.status.generation).toBe(generationBefore)
+    expect(capture.open).toHaveBeenCalledOnce()
+    expect(consent.register).toHaveBeenCalledOnce()
+    expect(runtime.validate).toHaveBeenCalledOnce()
+    expect(clearInterval).toHaveBeenCalledOnce()
+    expect(intervals.at(-1)).toBe(200)
+    await coordinator.stop()
+    expect(clearInterval).toHaveBeenCalledTimes(2)
   })
 
   it('registers consent before lazy model validation and stops in privacy order', async () => {

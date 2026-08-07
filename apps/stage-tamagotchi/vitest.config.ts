@@ -18,6 +18,8 @@ export default defineConfig({
   test: {
     env: loadEnv('test', cwd(), ''),
     include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
-    exclude: ['**/node_modules/**', '**/.git/**'],
+    // Browser-mode suites run through `vitest.browser.config.ts`; importing
+    // `vitest-browser-vue` in the node forks pool throws at collection time.
+    exclude: ['**/node_modules/**', '**/.git/**', 'src/**/*.browser.test.ts'],
   },
 })

@@ -5,13 +5,28 @@ import {
   estimateQwenRealtimeCost,
   evaluateQwenCloudReadiness,
   parseQwenCloudPerceptionPolicy,
+  QWEN_CLOUD_POLICY_VERSION,
   QWEN_CLOUD_PRICE_PROFILE_ID,
+  QWEN_CLOUD_PRIVACY_PROFILE_ID,
   QWEN_FLASH_REALTIME_MODEL_ID,
   QWEN_PLUS_REALTIME_MODEL_ID,
   QwenCloudCostLedger,
 } from './cloud-policy'
 
 describe('qwen cloud perception policy', () => {
+  it('freezes the dated official privacy facts without conflating logs and session context', () => {
+    expect(approvedQwenCloudPerceptionPolicy).toMatchObject({
+      contractVersion: 'perception-cloud-policy/v0.4',
+      providerPrivacyProfileId: 'qwen-realtime-cn-support-2026-07-27',
+      providerRetention: 'service-logs-one-month',
+      providerDataUse: 'not-used-for-training-improvement-evaluation-or-human-review',
+      providerDataBoundary: 'cn-mainland-no-cross-region-or-cross-border',
+      sessionContextRetention: 'cleared-on-disconnect',
+    })
+    expect(QWEN_CLOUD_POLICY_VERSION).toBe('perception-cloud-policy/v0.4')
+    expect(QWEN_CLOUD_PRIVACY_PROFILE_ID).toBe('qwen-realtime-cn-support-2026-07-27')
+  })
+
   it('accepts only the approved China mainland policy', () => {
     expect(parseQwenCloudPerceptionPolicy(structuredClone(approvedQwenCloudPerceptionPolicy)).success).toBe(true)
 
@@ -22,6 +37,19 @@ describe('qwen cloud perception policy', () => {
     const expandedConsent = structuredClone(approvedQwenCloudPerceptionPolicy) as any
     expandedConsent.consent.cameraFrames = 'always'
     expect(parseQwenCloudPerceptionPolicy(expandedConsent)).toEqual({ success: false, errorCode: 'cloud-policy-invalid' })
+  })
+
+  it.each([
+    ['providerPrivacyProfileId', 'qwen-realtime-cn-unknown'],
+    ['providerRetention', 'retained-indefinitely'],
+    ['providerDataUse', 'used-for-training'],
+    ['providerDataBoundary', 'cross-border-allowed'],
+    ['sessionContextRetention', 'retained-after-disconnect'],
+  ] as const)('rejects a changed v0.4 privacy field: %s', (field, invalidValue) => {
+    const changedPolicy = structuredClone(approvedQwenCloudPerceptionPolicy) as unknown as Record<string, unknown>
+    changedPolicy[field] = invalidValue
+
+    expect(parseQwenCloudPerceptionPolicy(changedPolicy)).toEqual({ success: false, errorCode: 'cloud-policy-invalid' })
   })
 
   it('reports every missing external prerequisite without exposing values', () => {

@@ -3,6 +3,7 @@ import type { Client } from '@proj-airi/server-sdk'
 
 import type { AiriBridge } from '../airi/airi-bridge'
 import type { MinecraftContextService } from '../airi/minecraft-context-service'
+import type { MinecraftAgentCompanion } from './companion'
 import type { EventBus } from './event-bus'
 import type { RuleEngine } from './perception/rules'
 
@@ -15,6 +16,7 @@ import { AiriBridge as AiriBridgeImpl } from '../airi/airi-bridge'
 import { MinecraftContextService as MinecraftContextServiceImpl } from '../airi/minecraft-context-service'
 import { config } from '../composables/config'
 import { TaskExecutor } from './action/task-executor'
+import { MinecraftAgentCompanion as MinecraftAgentCompanionImpl } from './companion'
 import { Brain } from './conscious/brain'
 import { LLMAgent } from './conscious/llm-agent'
 import { createEventBus } from './event-bus'
@@ -34,6 +36,7 @@ export interface ContainerServices {
   airiClient: Client
   airiBridge: AiriBridge
   minecraftContextService: MinecraftContextService
+  minecraftAgentCompanion: MinecraftAgentCompanion
 }
 
 export function createAgentContainer(airiClient: Client) {
@@ -110,6 +113,21 @@ export function createAgentContainer(airiClient: Client) {
     // TaskExecutor with logger injection only
     taskExecutor: asFunction(({ logger }) =>
       new TaskExecutor({ logger }),
+    ).singleton(),
+
+    minecraftAgentCompanion: asFunction(({ airiBridge, taskExecutor }) =>
+      new MinecraftAgentCompanionImpl({
+        airiBridge,
+        taskExecutor,
+        runtimeConfig: {
+          host: config.bot.host,
+          port: config.bot.port,
+          username: config.bot.username,
+          version: config.bot.version,
+          auth: config.bot.auth,
+        },
+        controlEnabled: config.bot.agentControlEnabled,
+      }),
     ).singleton(),
 
     brain: asClass(Brain)

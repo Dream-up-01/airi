@@ -41,46 +41,73 @@ const errorMessage = ref('')
 const audioPlayer = ref<HTMLAudioElement | null>(null)
 const useSSML = ref(false)
 const ssmlText = ref('')
+let playbackTimer: ReturnType<typeof setTimeout> | undefined
+let requestGeneration = 0
+let disposed = false
 
 // Function to generate speech
 async function handleGenerateTestSpeech() {
   if ((!testText.value.trim() && !useSSML.value) || (useSSML.value && !ssmlText.value.trim()))
     return
 
+  const generation = ++requestGeneration
   isGenerating.value = true
   errorMessage.value = ''
+  if (playbackTimer) {
+    clearTimeout(playbackTimer)
+    playbackTimer = undefined
+  }
 
   try {
     // Stop any currently playing audio
-    if (audioUrl.value) {
-      stopTestAudio()
-    }
+    stopTestAudio({ invalidate: false })
 
     const input = useSSML.value ? ssmlText.value : testText.value
 
     const response = await props.generateSpeech(input, voice.value, useSSML.value, model.value)
 
+    if (disposed || generation !== requestGeneration)
+      return
+
     // Convert the response to a blob and create an object URL
     audioUrl.value = URL.createObjectURL(new Blob([response]))
 
     // Play the audio
-    setTimeout(() => {
-      if (audioPlayer.value) {
-        audioPlayer.value.play()
-      }
+    playbackTimer = setTimeout(() => {
+      playbackTimer = undefined
+      if (disposed || generation !== requestGeneration)
+        return
+
+      const playPromise = audioPlayer.value?.play()
+      playPromise?.catch((error) => {
+        if (disposed || generation !== requestGeneration)
+          return
+        errorMessage.value = errorMessageFrom(error) ?? t('settings.pages.providers.provider.elevenlabs.playground.validation.error-playback')
+      })
     }, 100)
   }
   catch (error) {
+    if (disposed || generation !== requestGeneration)
+      return
     console.error('Error generating speech:', error)
     errorMessage.value = errorMessageFrom(error) ?? 'An unknown error occurred'
   }
   finally {
-    isGenerating.value = false
+    if (generation === requestGeneration)
+      isGenerating.value = false
   }
 }
 
 // Function to stop audio playback
-function stopTestAudio() {
+function stopTestAudio(options: { invalidate?: boolean } = {}) {
+  if (options.invalidate !== false)
+    requestGeneration++
+
+  if (playbackTimer) {
+    clearTimeout(playbackTimer)
+    playbackTimer = undefined
+  }
+
   if (audioPlayer.value) {
     audioPlayer.value.pause()
     audioPlayer.value.currentTime = 0
@@ -95,9 +122,8 @@ function stopTestAudio() {
 
 // Clean up when component is unmounted
 onUnmounted(() => {
-  if (audioUrl.value) {
-    URL.revokeObjectURL(audioUrl.value)
-  }
+  disposed = true
+  stopTestAudio()
 })
 
 // Expose public methods and state

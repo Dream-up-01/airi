@@ -25,7 +25,12 @@ import { Button, FieldCombobox } from '@proj-airi/ui'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, shallowRef } from 'vue'
 
-import { startLocalVoiceService, stopLocalVoiceService } from '../../../../composables/use-local-voice-service-start'
+import { startLocalVoiceService } from '../../../../composables/use-local-voice-service-start'
+import {
+  isManagedLocalVoiceServiceEndpoint,
+  quiesceVoiceRuntimeForSwitch,
+  stopAndDisposePreviousVoiceService,
+} from '../../../../composables/use-local-voice-service-switch'
 
 const providerId = SENSEVOICE_LOCAL_PROVIDER_ID
 const hearingStore = useHearingStore()
@@ -105,10 +110,29 @@ async function validateAndUseForVoiceConversation() {
   isStarting.value = true
   const previousProviderId = hearingStore.activeTranscriptionProvider
   try {
-    const startResult = await startLocalVoiceService('sensevoice')
-    if (!startResult.ok) {
-      activationError.value = t(`settings.pages.providers.provider.sensevoice-local.settings.start_errors.${startResult.errorCode}`)
+    const quiesceResult = await quiesceVoiceRuntimeForSwitch({ reason: 'provider-switch' })
+    if (!quiesceResult.ok) {
+      activationError.value = quiesceResult.timedOut
+        ? t('settings.pages.providers.provider.sensevoice-local.settings.runtime_quiesce_timeout')
+        : t('settings.pages.providers.provider.sensevoice-local.settings.runtime_quiesce_failed')
       return
+    }
+
+    const previousService = await stopAndDisposePreviousVoiceService({
+      previousProviderId,
+      nextProviderId: providerId,
+      serviceIdForProvider: previousId => previousId === QWEN3_ASR_LOCAL_PROVIDER_ID ? 'qwen3-asr' : undefined,
+      disposeProvider: providerId => providersStore.disposeProviderInstance(providerId),
+    })
+    if (!previousService.ok)
+      return
+
+    if (isManagedLocalVoiceServiceEndpoint('sensevoice', baseUrl.value)) {
+      const startResult = await startLocalVoiceService('sensevoice')
+      if (!startResult.ok) {
+        activationError.value = t(`settings.pages.providers.provider.sensevoice-local.settings.start_errors.${startResult.errorCode}`)
+        return
+      }
     }
 
     await providersStore.disposeProviderInstance(providerId)
@@ -127,9 +151,6 @@ async function validateAndUseForVoiceConversation() {
       voiceSettingsStorageKeys.activeTranscriptionModel,
       voiceSettingsStorageKeys.activeTranscriptionCustomModel,
     ])
-
-    if (previousProviderId === QWEN3_ASR_LOCAL_PROVIDER_ID)
-      await stopLocalVoiceService('qwen3-asr')
   }
   finally {
     isStarting.value = false

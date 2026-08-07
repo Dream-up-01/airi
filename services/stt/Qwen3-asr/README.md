@@ -1,6 +1,6 @@
 # Qwen3-ASR streaming service for AIRI
 
-This bridge runs `Qwen/Qwen3-ASR-0.6B` inside the local Ubuntu WSL2 instance and exposes a loopback-friendly streaming protocol:
+This bridge runs `Qwen/Qwen3-ASR-0.6B` inside the local Ubuntu WSL2 instance and exposes a loopback-only streaming protocol. The managed launcher binds to `127.0.0.1` because this local bridge has no application-level authentication; it must not be exposed on a LAN interface:
 
 - `GET /health`
 - `POST /api/start`

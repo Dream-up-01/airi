@@ -14,6 +14,7 @@ export { createChatHooks } from './runtime/agent-hooks'
 export type {
   AssistantOutputPolicyDecision,
   AssistantOutputReleaseMode,
+  ChatCancellationReason,
   ChatOrchestratorLifecycleRecord,
   ChatOrchestratorLLMPort,
   ChatOrchestratorPromptProjection,

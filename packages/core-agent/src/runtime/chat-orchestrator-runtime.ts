@@ -60,7 +60,20 @@ export interface ChatOrchestratorSendOptions {
   tools?: StreamOptions['tools']
   /** Original transport input metadata used by bridge/devtools observers. */
   input?: ChatStreamEventContext['input']
+  /**
+   * Runtime-only cancellation signal. It is deliberately not serialized into
+   * chat-sync payloads or persisted with a message.
+   */
+  abortSignal?: AbortSignal
 }
+
+export type ChatCancellationReason
+  = 'voice-interrupt'
+    | 'provider-switch'
+    | 'user-stop'
+    | 'page-dispose'
+    | 'session-reset'
+    | 'unknown'
 
 interface QueuedSend {
   sendingMessage: string
@@ -338,6 +351,8 @@ export interface ChatOrchestratorRuntime {
   ingest: (sendingMessage: string, options: ChatOrchestratorSendOptions, targetSessionId?: string) => Promise<void>
   /** Rejects queued sends that have not started yet. */
   cancelPendingSends: (sessionId?: string) => void
+  /** Aborts active sends and rejects queued sends for the selected session. */
+  cancelActiveSends: (sessionId?: string, reason?: ChatCancellationReason) => void
   /** Returns serializable snapshots of currently queued sends. */
   getPendingQueuedSendSnapshot: () => QueuedSendSnapshot[]
   /** Returns the current queued send count. */
@@ -377,6 +392,7 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
 
   let sending = false
   let pendingQueuedSends: QueuedSend[] = []
+  const activeSendControllers = new Map<string, Set<AbortController>>()
 
   function emitStateChange() {
     deps.onStateChange?.({
@@ -443,7 +459,31 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
     if (!sendingMessage && !options.attachments?.length)
       return
 
+    if (options.abortSignal?.aborted)
+      return
+
     deps.session.ensureSession(sessionId)
+
+    const abortController = new AbortController()
+    const activeControllers = activeSendControllers.get(sessionId) ?? new Set<AbortController>()
+    activeControllers.add(abortController)
+    activeSendControllers.set(sessionId, activeControllers)
+    const externalAbortListener = () => {
+      if (!abortController.signal.aborted)
+        abortController.abort(options.abortSignal?.reason)
+    }
+    if (options.abortSignal) {
+      if (options.abortSignal.aborted)
+        externalAbortListener()
+      else
+        options.abortSignal.addEventListener('abort', externalAbortListener, { once: true })
+    }
+    const disposeActiveController = () => {
+      options.abortSignal?.removeEventListener('abort', externalAbortListener)
+      activeControllers.delete(abortController)
+      if (activeControllers.size === 0)
+        activeSendControllers.delete(sessionId)
+    }
 
     // Datetime is no longer injected through the side-channel context store.
     // It is applied at message-assembly time (see below) as a system-prompt
@@ -471,9 +511,11 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
     })
 
     const isStaleGeneration = () => deps.session.getSessionGeneration(sessionId) !== generation
-    const shouldAbort = () => isStaleGeneration()
-    if (shouldAbort())
+    const shouldAbort = () => abortController.signal.aborted || isStaleGeneration()
+    if (shouldAbort()) {
+      disposeActiveController()
       return
+    }
 
     setSending(true)
 
@@ -734,10 +776,14 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
 
       await deps.llm.stream(options.model, options.chatProvider, newMessages as Message[], {
         headers,
+        abortSignal: abortController.signal,
         tools: bufferUntilValidated ? undefined : options.tools,
         waitForTools: !bufferUntilValidated,
         captureToolErrors: true,
         onStreamEvent: async (event: StreamEvent) => {
+          if (shouldAbort())
+            return
+
           switch (event.type) {
             case 'tool-call':
               toolCallQueue.enqueue({
@@ -799,7 +845,13 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
         },
       })
 
+      if (shouldAbort())
+        return
+
       await parser.end()
+
+      if (shouldAbort())
+        return
 
       const assistantVisibleText = typeof buildingMessage.content === 'string' ? buildingMessage.content : ''
       const outputPolicy = deps.validateAssistantOutput?.({
@@ -896,6 +948,9 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
       })
     }
     catch (error) {
+      if (shouldAbort())
+        return
+
       console.error('Error sending message:', error)
       deps.onChatActivationFailed?.({
         source: sendSource,
@@ -907,6 +962,7 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
       throw error
     }
     finally {
+      disposeActiveController()
       setSending(false)
       deps.onSendSettled?.({ sessionId })
     }
@@ -982,6 +1038,20 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
     emitStateChange()
   }
 
+  function cancelActiveSends(sessionId?: string, reason: ChatCancellationReason = 'unknown') {
+    for (const [ownedSessionId, controllers] of activeSendControllers) {
+      if (sessionId && ownedSessionId !== sessionId)
+        continue
+
+      for (const controller of controllers) {
+        if (!controller.signal.aborted)
+          controller.abort(new DOMException(`Chat send cancelled: ${reason}`, 'AbortError'))
+      }
+    }
+
+    cancelPendingSends(sessionId)
+  }
+
   function getPendingQueuedSendSnapshot() {
     return pendingQueuedSends.map(queued => ({
       sessionId: queued.sessionId,
@@ -996,6 +1066,7 @@ export function createChatOrchestratorRuntime(deps: ChatOrchestratorRuntimeDeps)
   return {
     ingest,
     cancelPendingSends,
+    cancelActiveSends,
     getPendingQueuedSendSnapshot,
     getPendingQueuedSendCount: () => pendingQueuedSends.length,
     getSending: () => sending,

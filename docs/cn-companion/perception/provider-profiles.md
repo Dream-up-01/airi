@@ -1,17 +1,17 @@
 # M3 Provider 与 runtime 基线
 
-文档核对状态：2026-07-18。阿里云百炼中国站公开 Realtime、客户端/服务端事件、限流、价格和隐私页面已于 2026-07-17 重新核对，并按用户确认冻结中国内地、Flash/Plus 和费用策略。Desktop 直接依赖 `ws@8.20.0`，production main-only socket factory、逐会话媒体授权、Screen/Camera orchestrator、共享云麦克风 subscriber 和严格 completed parser 已接线并通过无费用测试。当前用户级配置中 Workspace、API Key 和模型可用性标记已存在；最短保留/不用于训练仍未在控制台确认，因此 readiness 按设计 fail-closed，没有发起真实 Provider session 或产生费用。用户已于 2026-07-16 批准本地 Qwen3-VL 量化权重下载与真实 GPU 实测。
+文档核对状态：2026-07-28。阿里云百炼中国站公开 Realtime、客户端/服务端事件、限流、价格和隐私页面已于 2026-07-17 重新核对；阿里云官方售后工程师又于 2026-07-27 书面确认中国内地 Endpoint、日志留存、数据用途和断连后的会话上下文处理，并按用户确认冻结中国内地、Flash/Plus 和费用策略。Desktop 直接依赖 `ws@8.20.0`，production main-only socket factory、逐会话媒体授权、Screen/Camera orchestrator、共享云麦克风 subscriber 和严格 completed parser 已接线并通过无费用测试。Git 忽略的 Desktop `.env.local` 当前只绑定日期化 Provider 隐私证据；本次进程、用户和机器环境均未观察到 Workspace、API Key 或模型可用性标记，因此当前真实 Provider readiness 仍应 fail-closed。Provider 政策事实门现按“各种日志留存一个月、断连立即清除模型会话上下文、不用于训练/改进/评估或人工审阅、中国内地 Endpoint 不跨地域或跨境”记录，并已进入 cloud policy/control v0.4。会话上下文清除不等于服务日志删除，不得声明零留存；真实 Provider session/费用验收仍未完成，因此尚未发起本轮真实 Provider session 或产生费用。用户已于 2026-07-16 批准本地 Qwen3-VL 量化权重下载与真实 GPU 实测。
 
 | Profile | 状态 | 固定产品策略 | 实现前阻塞 |
 |---|---|---|---|
 | Local Screen Qwen3-VL | ready / device-verified | `Qwen/Qwen3-VL-4B-Instruct`，1280x720，normal ≤0.2 FPS，active ≤1 FPS | Transformers NF4、Desktop main worker、定向 Eventa、consent/indicator/single-owner/context 与真实 UI 已通过；10 分钟 deterministic cadence 与 single-in-flight/latest-slot 压力 trace 已通过 |
-| Cloud Screen Flash | production-integrated / provider-blocked | `qwen3.5-omni-flash-realtime` 常驻；text-only objective JSON | screen/audio 独立 grant、Manual PCM→JPEG→commit/create、strict completed parser、change gate、费用护栏和生产 socket 已通过；保留策略确认与真实 Provider 验收仍缺 |
-| Cloud Screen Plus | production-integrated / provider-blocked | `qwen3.5-omni-plus-realtime`，仅六个 allowlisted reason、单 in-flight | route evidence、consent/cost/cooldown、Flash pause、最多 24 张/4 分钟 memory-only sparse keyframes 和完成/失败回落已通过；真实 Plus 费用仍未验收 |
+| Cloud Screen Flash | production-integrated / provider-acceptance-pending | `qwen3.5-omni-flash-realtime` 常驻；text-only objective JSON | screen/audio 独立 grant、Manual PCM→JPEG→commit/create、strict completed parser、change gate、费用护栏和生产 socket 已通过；一月服务日志政策与 v0.4 readiness 字段已接线，仍缺真实付费 Provider 验收 |
+| Cloud Screen Plus | production-integrated / provider-acceptance-pending | `qwen3.5-omni-plus-realtime`，仅六个 allowlisted reason、单 in-flight | route evidence、consent/cost/cooldown、Flash pause、最多 24 张/4 分钟 memory-only sparse keyframes 和完成/失败回落已通过；一月服务日志政策与 v0.4 readiness 字段已接线，真实 Plus 费用仍未验收 |
 | Local Camera MediaPipe | ready / device-verified | presence/pose/hands/observable cue | Tasks Vision runtime、WASM 与 task assets 已进入 production build；只发布窄化 evidence |
 | Local Camera OpenCV | ready / device-verified | quality/motion/change/preprocess | 官方 OpenCV.js 4.13.0，10,964,323 bytes，固定 SHA-256，Apache-2.0；独立 Worker 实测通过 |
 | Local Camera YOLO | ready / device-verified | allowlisted person/object/count | 官方 YOLOX-Nano ONNX 0.1.1rc0，3,659,407 bytes，固定 SHA-256，Apache-2.0；ORT Web 1.24.3 WebGPU 实测通过 |
-| Cloud Camera Qwen | production-integrated / provider-blocked | 固定 Flash、不自动升级 Plus；640x360 默认；change gate ≤1 FPS | JPEG/尺寸/FPS/privacy gate、独立 camera/audio grant、shared microphone、echo/backpressure/cancel、Camera Plus 拒绝和生产 socket 已通过；保留策略确认与真实 Provider 验收仍缺 |
-| Minecraft adapter | partial | registry identity + structured schema facts | schema/skew/replay、grant ceiling 与 Desktop consent 已通过；仍需真实已认证 Minecraft Provider 端到端运行 |
+| Cloud Camera Qwen | production-integrated / provider-acceptance-pending | 固定 Flash、不自动升级 Plus；640x360 默认；change gate ≤1 FPS | JPEG/尺寸/FPS/privacy gate、独立 camera/audio grant、shared microphone、echo/backpressure/cancel、Camera Plus 拒绝和生产 socket 已通过；一月服务日志政策与 v0.4 readiness 字段已接线，仍缺真实付费 Provider 验收 |
+| Minecraft adapter | production-integrated / external-acceptance-pending | registry identity + structured schema facts | schema/skew/replay、grant ceiling 与 Desktop consent 已通过；仍需真实 PCL/Fabric 客户端中已配对 Mod 的端到端运行；PCL/游戏身份不作为授权依据 |
 
 ## Qwen Realtime 冻结差异门
 
@@ -29,9 +29,31 @@ AGENTS 基线：图片前需真实音频输入；使用 Manual response control�
 - 会话上限：单连接最长 120 分钟。Plus 为 100 音频轮/50 视频轮/600 秒音频/240 秒视频；Flash 为 80/50/480/120。实现必须在上限前主动轮换。
 - 中国内地公开限流：两个模型均为 60 RPM / 100,000 TPM；服务还可能按 RPS/TPS 执行，实际 Workspace 配额仍以控制台为准。
 - 公开价格（每百万 Token）：Plus 输入文本/图片 10 元、输入音频 80 元、输出文本 60 元、输出音频 300 元；Flash 分别为 3.3/27/20/107 元。M3 禁止音频输出，费用账本只使用前三类相关费率，price profile ID 为 `qwen-realtime-cn-2026-07-17`。
-- 隐私公开页：明确客户数据不用于模型训练，并说明调用数据会依法存储；公开页没有给出可选的最短保留时长。故 `shortest-available-no-training` 仍为控制台待验证门，未验证时 readiness 必须 blocked。
-- 2026-07-18 使用已登录中国站控制台复核了业务空间管理、账号管理、安全管理与业务空间内设置：未发现数据保留时长或“不用于训练”的可配置开关。公开“不用于训练”声明可以作为训练用途证据，但不能推导具体保留时长；必须由阿里云官方支持/工单书面确认 Realtime 音频、图片与响应的保留期限后，才能设置 `AIRI_QWEN_RETENTION_VERIFIED=true`。
+- 隐私公开页：明确客户数据不用于模型训练，并说明调用数据会依法存储；公开页没有给出可选的最短保留时长。该公开页面本身不能证明零留存或具体期限，需以 2026-07-27 官方售后书面回复补充数据政策事实。
+- 2026-07-18 使用已登录中国站控制台复核了业务空间管理、账号管理、安全管理与业务空间内设置：未发现数据保留时长或“不用于训练”的可配置开关。控制台不可配置不等于零留存；2026-07-27 官方售后书面回复已确认日志留存期限和数据用途，因此 `AIRI_QWEN_RETENTION_VERIFIED` 只能在生产配置准确绑定下述一个月日志留存政策、地区和证据日期后设为 `true`，不能被解释为“无服务端留存”。
+- 2026-07-28 本机 Desktop 开发配置已通过 Git 忽略的 `apps/stage-tamagotchi/.env.local` 写入 `MAIN_VITE_AIRI_QWEN_RETENTION_VERIFIED=true` 与 `MAIN_VITE_AIRI_QWEN_PRIVACY_PROFILE_ID=qwen-realtime-cn-support-2026-07-27`；Electron-Vite `loadEnv` 已确认可读取。只有这两个隐私证据键同时接受无前缀和 `MAIN_VITE_` 前缀；Workspace、API Key 与模型可用性仍只读取运行进程中的无前缀变量。该配置只满足隐私证据门，不代表 Provider session、模型可用性或费用验收已经完成。
 - 官方来源：`https://help.aliyun.com/zh/model-studio/realtime`、`client-events`、`server-events`、`rate-limit`、`model-pricing`、`privacy-notice`（核对日期 2026-07-17）。
+
+### 2026-07-27 阿里云官方售后书面回复
+
+证据来源为阿里云官方售后工程师在官方服务渠道的书面回复，日期为 2026-07-27。本文只记录答复中的政策结论，不保存工单截图、账号信息、原始会话内容或本机路径。
+
+| 主题 | 官方回复确认的事实 | M3 解释与约束 |
+|---|---|---|
+| 服务日志留存 | 各种日志保留一个月 | 云端不是零留存。屏幕帧、摄像头帧、真实麦克风音频和 completed text 的用户告知与授权必须按“服务日志可能留存一个月”设计；不能用断连行为覆盖该披露 |
+| 数据用途 | 不用于训练、改进、评估或人工审阅 | 可作为 no-training/no-review 政策证据；不改变最小上传、逐 modality 授权、raw payload 不进入 AIRI 日志/持久化和 strict objective parser 等本地约束 |
+| 地域 | 中国内地 Endpoint 位于中国内地，不跨地域或跨境 | 中国内地 Profile 继续只允许已冻结的中国内地 Endpoint；任何 Endpoint、Workspace 或区域变化都必须重新走用户决策门 |
+| 模型会话上下文 | 连接断开后立即清除模型会话上下文 | 只描述模型会话内上下文生命周期，不代表服务日志同时删除，也不改变日志一个月留存事实。AIRI 仍应在 stop/revoke/switch 时立即关闭 socket、释放本地 PCM/JPEG 引用并撤回旧 generation |
+| Flash/Plus 差异 | 推理能力、响应能力和上下文记录轮数存在差异 | 不据此扩大输入、授权或保留范围。售后回复未给出更细的量化值，公开 session/turn/media limits 仍按上方 2026-07-17 时间点基线记录；也不得推导两模型具有不同的数据用途或日志留存政策 |
+
+政策结论：此前“具体保留期限未知”的问题已关闭，已知答案为一个月服务日志留存；“断连立即清除模型会话上下文”是另一条独立生命周期事实。任何 UI、配置、验收记录或发布说明都必须同时呈现这两点，不得使用“断连即删除数据”“零留存”或等价表述。
+
+仍未回答、不得自行推断的问题：
+
+- “各种日志”具体包含哪些请求、响应、媒体载荷或派生字段，尤其是否及如何包含 Realtime 音频、图片、completed text、转写和元数据。
+- 一个月日志留存能否通过 Workspace、企业协议或官方配置缩短，是否存在更短或零日志留存方案。
+
+在这两个问题得到进一步书面答复前，M3 采用保守披露：所有发往 Qwen Realtime 的获授权媒体和响应均按“可能进入留存一个月的服务日志”向用户说明；不得据此扩大 AIRI 自己的本地留存，AIRI 侧仍保持 raw payload memory-only、处理后立即释放且不写日志/遥测/导出。
 
 用户批准策略：屏幕帧显式启用时允许；摄像头帧与云麦克风按会话分别授权；Screen 常驻 Flash、六条件临时 Plus；Camera 固定 Flash；预算 5 元/次、10 元/日、50 元/月；失败停止云感知，不切模型、不循环重试；本地不保存图片、音频或完整响应；主动 reaction 关闭。
 
@@ -125,4 +147,4 @@ Camera local 的完整比较、固定边界、制品 hash 与真实设备结果�
 - 真实 Desktop main manager 启动结果：load 12,441ms，`[code,browser]` 推理 5,612ms，返回 `browser`，provenance 为 `transformers-service / screen:transformers-local`；stop 后端口、WSL worker 和 Python/WSL GPU client 均为 0。
 - 真实 Electron Eventa adapter 传输 4×190KiB JPEG 共 778,240 bytes，保持 open → 4 frame → complete 顺序，成功路径 7.9ms；AbortSignal 实测返回 `AbortError`。
 
-状态：**Transformers 4-bit runtime、Desktop main worker manager、定向 Eventa gateway/facade、可信 consent registry、持续指示、single-owner session/generation、生产 UI 与有界 context projection 均已通过真实硬门，Local Screen 本地切片为 `ready / device-verified`。这不代表整个 M3 complete；云端 Provider、Minecraft 实服与 M3.13 剩余矩阵仍未完成。Ollama profile 继续保持 `degraded`，不会静默 fallback。**
+状态：**Transformers 4-bit runtime、Desktop main worker manager、定向 Eventa gateway/facade、可信 consent registry、持续指示、single-owner session/generation、生产 UI 与有界 context projection 均已通过真实硬门，Local Screen 本地切片为 `ready / device-verified`。这不代表整个 M3 complete；真实付费 Qwen Provider 与真实 PCL/Fabric Provider 验收仍未完成。Ollama profile 继续保持 `degraded`，不会静默 fallback。**

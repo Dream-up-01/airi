@@ -2,6 +2,7 @@ import type { PerceptionContextProjection, PerceptionOwnerHandle } from '@proj-a
 import type { ComputedRef, InjectionKey } from 'vue'
 
 import type { PerceptionRuntimeState, PerceptionRuntimeStatusWire } from '../../../shared/eventa/perception-runtime-status'
+import type { MinecraftPerceptionControlRequestHandler } from '../../services/perception/perception-minecraft-control-sync'
 
 import { provideMinecraftPerceptionControl } from '@proj-airi/stage-ui/composables/minecraftPerceptionControl'
 import { createPerceptionContextMessage } from '@proj-airi/stage-ui/stores/chat/context-providers'
@@ -12,8 +13,13 @@ import { useTimeoutFn } from '@vueuse/core'
 import { computed, inject, onScopeDispose, provide, shallowRef, watch } from 'vue'
 
 import { createPerceptionContextProjectionPeer } from '../../services/perception/perception-context-projection-sync'
+import { createMinecraftPerceptionControlPeer } from '../../services/perception/perception-minecraft-control-sync'
 import { createPerceptionRuntimeStatusPeer } from '../../services/perception/perception-runtime-status-sync'
 import { productionPerceptionOwnerProvider } from '../../services/perception/production-perception-owner'
+
+export interface MinecraftPerceptionOptions {
+  ownerEligible?: boolean
+}
 
 export interface MinecraftPerceptionContext {
   store: ReturnType<typeof useMinecraftStore>
@@ -29,7 +35,8 @@ export interface MinecraftPerceptionContext {
 
 const minecraftPerceptionKey: InjectionKey<MinecraftPerceptionContext> = Symbol('minecraft-perception')
 
-export function provideMinecraftPerception(): MinecraftPerceptionContext {
+export function provideMinecraftPerception(options: MinecraftPerceptionOptions = {}): MinecraftPerceptionContext {
+  const ownerEligible = options.ownerEligible ?? true
   const store = useMinecraftStore()
   const chatContext = useChatContextStore()
   const remoteStatuses = shallowRef<readonly PerceptionRuntimeStatusWire[]>([])
@@ -51,15 +58,28 @@ export function provideMinecraftPerception(): MinecraftPerceptionContext {
     sourceKind: 'minecraft',
     onRemoteProjection: syncProjection,
   })
+  const controlPeer = createMinecraftPerceptionControlPeer({
+    onRequest: ownerEligible ? handleControlRequest : undefined,
+  })
+
+  const remoteMinecraftStatuses = computed(() => remoteStatuses.value.filter(status => status.sourceKind === 'minecraft'))
 
   const state = computed<'off' | 'waiting' | 'running' | 'paused' | 'failed'>(() => {
-    if (lastControlErrorCode.value && !store.perceptionEnabled)
-      return 'failed'
-    if (!store.perceptionEnabled)
-      return 'off'
-    if (store.perceptionPaused)
+    if (store.perceptionEnabled) {
+      if (lastControlErrorCode.value)
+        return 'failed'
+      if (store.perceptionPaused)
+        return 'paused'
+      return store.serviceConnected ? 'running' : 'waiting'
+    }
+    const remoteState = remoteMinecraftStatuses.value[0]?.state
+    if (remoteState === 'paused')
       return 'paused'
-    return store.serviceConnected ? 'running' : 'waiting'
+    if (remoteState === 'starting' || remoteState === 'running')
+      return 'running'
+    if (lastControlErrorCode.value)
+      return 'failed'
+    return 'off'
   })
 
   watch([
@@ -91,6 +111,10 @@ export function provideMinecraftPerception(): MinecraftPerceptionContext {
       lastControlErrorCode.value = 'permission-denied'
       return
     }
+    if (!ownerEligible) {
+      await requestRemoteControl('start', true)
+      return
+    }
     await runExclusive(async () => {
       if (remoteStatuses.value.length > 0) {
         lastControlErrorCode.value = 'owner-unavailable'
@@ -107,6 +131,10 @@ export function provideMinecraftPerception(): MinecraftPerceptionContext {
   }
 
   async function pause(): Promise<void> {
+    if (!ownerEligible) {
+      await requestRemoteControl('pause', false)
+      return
+    }
     await runExclusive(async () => {
       if (!ownerHandle || !store.perceptionEnabled || store.perceptionPaused)
         return
@@ -118,6 +146,10 @@ export function provideMinecraftPerception(): MinecraftPerceptionContext {
   }
 
   async function resume(): Promise<void> {
+    if (!ownerEligible) {
+      await requestRemoteControl('resume', false)
+      return
+    }
     await runExclusive(async () => {
       if (!store.perceptionEnabled || !store.perceptionPaused || remoteStatuses.value.length > 0)
         return
@@ -132,6 +164,10 @@ export function provideMinecraftPerception(): MinecraftPerceptionContext {
   }
 
   async function stop(): Promise<void> {
+    if (!ownerEligible) {
+      await requestRemoteControl('stop', false)
+      return
+    }
     await runExclusive(async () => {
       if (store.perceptionEnabled)
         store.disablePerception()
@@ -176,11 +212,48 @@ export function provideMinecraftPerception(): MinecraftPerceptionContext {
     return operation
   }
 
+  async function requestRemoteControl(command: 'start' | 'pause' | 'resume' | 'stop', consentConfirmed: boolean): Promise<void> {
+    try {
+      const result = await controlPeer.request(command, consentConfirmed)
+      lastControlErrorCode.value = result.errorCode
+    }
+    catch {
+      lastControlErrorCode.value = 'owner-unavailable'
+    }
+  }
+
+  async function handleControlRequest(
+    request: Parameters<MinecraftPerceptionControlRequestHandler>[0],
+    respond: Parameters<MinecraftPerceptionControlRequestHandler>[1],
+  ): Promise<void> {
+    if (!ownerEligible)
+      return
+    if (request.command === 'start' && !request.consentConfirmed) {
+      respond({ state: 'failed', generation: store.generation, errorCode: 'permission-denied' })
+      return
+    }
+
+    try {
+      if (request.command === 'start')
+        await start(true)
+      else if (request.command === 'pause')
+        await pause()
+      else if (request.command === 'resume')
+        await resume()
+      else
+        await stop()
+      respond({ state: runtimeState(), generation: store.generation, ...(lastControlErrorCode.value ? { errorCode: lastControlErrorCode.value } : {}) })
+    }
+    catch {
+      respond({ state: 'failed', generation: store.generation, errorCode: 'control-failed' })
+    }
+  }
+
   const context: MinecraftPerceptionContext = {
     store,
     state,
     remoteStatuses: computed(() => remoteStatuses.value),
-    hasRemoteOwner: computed(() => remoteStatuses.value.length > 0),
+    hasRemoteOwner: computed(() => remoteMinecraftStatuses.value.length > 0),
     lastControlErrorCode: computed(() => lastControlErrorCode.value),
     start,
     pause,
@@ -196,6 +269,7 @@ export function provideMinecraftPerception(): MinecraftPerceptionContext {
       store.disablePerception()
     projectionPeer.publish(null, store.generation)
     projectionPeer.dispose()
+    controlPeer.dispose()
     runtimeStatusPeer.publish('stopped', store.generation)
     runtimeStatusPeer.dispose()
     chatContext.retractContextSource(MINECRAFT_CONTEXT_ID)

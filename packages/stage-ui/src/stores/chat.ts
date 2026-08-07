@@ -1,4 +1,4 @@
-import type { ChatOrchestratorRuntimeState, ChatOrchestratorSendOptions, StreamEvent, StreamOptions } from '@proj-airi/core-agent'
+import type { ChatCancellationReason, ChatOrchestratorRuntimeState, ChatOrchestratorSendOptions, StreamEvent, StreamOptions } from '@proj-airi/core-agent'
 import type { ChatProvider } from '@xsai-ext/providers/utils'
 import type { Message } from '@xsai/shared-chat'
 
@@ -51,7 +51,11 @@ function isTextDelta(event: StreamEvent): event is Extract<StreamEvent, { type: 
   return event.type === 'text-delta'
 }
 
-export type { QueuedSendSnapshot, ChatOrchestratorSendOptions as SendOptions } from '@proj-airi/core-agent'
+export type {
+  ChatCancellationReason,
+  QueuedSendSnapshot,
+  ChatOrchestratorSendOptions as SendOptions,
+} from '@proj-airi/core-agent'
 
 export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
   const { t } = useI18n()
@@ -593,6 +597,10 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
     runtime.cancelPendingSends(sessionId)
   }
 
+  function cancelActiveSends(sessionId?: string, reason: ChatCancellationReason = 'unknown') {
+    runtime.cancelActiveSends(sessionId, reason)
+  }
+
   function getPendingQueuedSendSnapshot() {
     return runtime.getPendingQueuedSendSnapshot()
   }
@@ -604,6 +612,7 @@ export const useChatOrchestratorStore = defineStore('chat-orchestrator', () => {
     ingest,
     ingestOnFork,
     cancelPendingSends,
+    cancelActiveSends,
     getPendingQueuedSendSnapshot,
 
     clearHooks: runtime.hooks.clearHooks,

@@ -16,6 +16,13 @@ function getMineBlockAtAction() {
   return action
 }
 
+function getChatAction() {
+  const action = actionsList.find(item => item.name === 'chat')
+  if (!action)
+    throw new Error('chat action missing')
+  return action
+}
+
 describe('llm-actions mineBlockAt', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -68,5 +75,18 @@ describe('llm-actions mineBlockAt', () => {
 
     const perform = skipAction!.perform({} as any)
     expect(perform()).toBe('Skipped turn')
+  })
+
+  it('bounds chat and rejects server commands at schema and execution boundaries', () => {
+    const chatAction = getChatAction()
+    expect(chatAction.schema.safeParse({ message: 'hello', feedback: false }).success).toBe(true)
+    expect(chatAction.schema.safeParse({ message: '/op me', feedback: false }).success).toBe(false)
+    expect(chatAction.schema.safeParse({ message: 'x'.repeat(257), feedback: false }).success).toBe(false)
+    expect(chatAction.schema.safeParse({ message: 'hello\n/op me', feedback: false }).success).toBe(false)
+
+    const mineflayer = { bot: { chat: vi.fn() } } as any
+    const perform = chatAction.perform(mineflayer)
+    expect(() => perform('/op me')).toThrow(/not allowed/i)
+    expect(mineflayer.bot.chat).not.toHaveBeenCalled()
   })
 })

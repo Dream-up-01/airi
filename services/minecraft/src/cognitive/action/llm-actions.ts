@@ -15,6 +15,13 @@ import * as skills from '../../skills'
 // Utils
 const pad = (str: string): string => `\n${str}\n`
 
+function isSafeMinecraftChatMessage(message: string): boolean {
+  return message.length >= 1
+    && message.length <= 256
+    && !message.trimStart().startsWith('/')
+    && !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(message)
+}
+
 function toCoord(pos: { x: number, y: number, z: number }) {
   return { x: pos.x, y: pos.y, z: pos.z }
 }
@@ -29,10 +36,12 @@ export const actionsList: Action[] = [
     description: 'Send a chat message to players in the game. Use this to communicate, respond to questions, or announce what you are doing.',
     execution: 'sync',
     schema: z.object({
-      message: z.string().describe('The message to send in chat.'),
+      message: z.string().min(1).max(256).refine(isSafeMinecraftChatMessage, 'Minecraft server commands and control characters are not allowed.').describe('The bounded player-visible chat message to send. Minecraft slash commands are forbidden.'),
       feedback: z.boolean().default(false).describe('Whether to emit FEEDBACK for this chat action. Keep false for normal conversation to avoid feedback loops.'),
     }),
     perform: mineflayer => (message: string): string => {
+      if (!isSafeMinecraftChatMessage(message))
+        throw new Error('Minecraft server commands and unsafe chat content are not allowed')
       mineflayer.bot.chat(message)
       return `Sent message: "${message}"`
     },

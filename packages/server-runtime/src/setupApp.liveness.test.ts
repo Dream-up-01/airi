@@ -128,16 +128,20 @@ function createExtensionModuleAnnounceEvent(): WebSocketEvent {
   }
 }
 
-function createFabricModuleAnnounceEvent(moduleInstanceId: string): WebSocketEvent {
+function createFabricModuleAnnounceEvent(
+  moduleInstanceId: string,
+  extensionId = 'airi-mc-connect',
+  name = 'minecraft-bot',
+): WebSocketEvent {
   return {
     type: 'extension:module:announce',
     data: {
-      name: 'minecraft-bot',
+      name,
       possibleEvents: [],
       identity: {
         id: moduleInstanceId,
         extension: {
-          id: 'airi-mc-connect',
+          id: extensionId,
           version: '0.1.0-alpha.1',
         },
         labels: { runtime: 'fabric' },
@@ -147,7 +151,7 @@ function createFabricModuleAnnounceEvent(moduleInstanceId: string): WebSocketEve
       source: {
         kind: 'plugin',
         id: moduleInstanceId,
-        plugin: { id: 'airi-mc-connect' },
+        plugin: { id: extensionId },
       },
       event: { id: 'fabric-announce-1' },
     },
@@ -309,6 +313,178 @@ describe('setupApp websocket liveness', () => {
         expect.objectContaining({ type: 'module:authenticated' }),
       ]))
     })
+
+    runtime.dispose()
+  })
+
+  it('requires device pairing for the protected Minecraft module even without a global token', () => {
+    const runtime = setupApp({
+      auth: {
+        token: '',
+        modulePairing: {
+          isPaired: () => true,
+          requestApproval: () => true,
+          remember: () => {},
+          requiresPairing: target => target.identity.extension.id === 'airi-mc-connect',
+        },
+      },
+    })
+    const handler = wsHandler()
+    const modulePeer = createPeer('module-peer')
+    const legacyPeer = createPeer('legacy-peer')
+
+    handler.open?.(modulePeer.peer)
+    sendEvent(handler, modulePeer.peer, createFabricModuleAnnounceEvent('fabric-process-1', 'airi-mc-connect', 'spoofed-module-name'))
+    expect(decodeEvents(modulePeer.sent)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ message: 'must authenticate before announcing' }),
+      }),
+    ]))
+
+    handler.open?.(legacyPeer.peer)
+    sendEvent(handler, legacyPeer.peer, createFabricModuleAnnounceEvent('legacy-process-1', 'legacy-extension', 'legacy-module'))
+    expect(decodeEvents(legacyPeer.sent)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'extension:module:announced' }),
+    ]))
+
+    runtime.dispose()
+  })
+
+  it('re-checks a paired device immediately before authenticating', async () => {
+    const keyPair = generateKeyPairSync('ed25519')
+    const publicKey = keyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
+    let paired = true
+    const runtime = setupApp({
+      auth: {
+        token: '',
+        modulePairing: {
+          isPaired: () => paired,
+          requestApproval: () => true,
+          remember: () => {},
+        },
+      },
+    })
+    const handler = wsHandler()
+    const modulePeer = createPeer('module-peer')
+    const moduleInstanceId = 'fabric-process-1'
+
+    handler.open?.(modulePeer.peer)
+    const optimisticAuthCount = () => decodeEvents(modulePeer.sent).filter(event => event.type === 'module:authenticated').length
+    const initialAuthCount = optimisticAuthCount()
+    sendEvent(handler, modulePeer.peer, createPairingHelloEvent(moduleInstanceId, publicKey))
+    await vi.waitFor(() => {
+      expect(decodeEvents(modulePeer.sent).some(event => event.type === 'module:pairing:challenge')).toBe(true)
+    })
+    const challenge = decodeEvents(modulePeer.sent)
+      .find(event => event.type === 'module:pairing:challenge')!
+    paired = false
+    sendEvent(handler, modulePeer.peer, createPairingProofEvent({
+      moduleInstanceId,
+      requestId: challenge.data.requestId,
+      nonce: challenge.data.nonce,
+      publicKey,
+      privateKey: keyPair.privateKey,
+    }))
+
+    await vi.waitFor(() => {
+      expect(decodeEvents(modulePeer.sent)).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: 'error',
+          data: expect.objectContaining({ message: 'pairing-proof-invalid' }),
+        }),
+      ]))
+    })
+    expect(optimisticAuthCount()).toBe(initialAuthCount)
+
+    runtime.dispose()
+  })
+
+  it('invalidates pending pairing challenges and approvals when a device is revoked', async () => {
+    const keyPair = generateKeyPairSync('ed25519')
+    const publicKey = keyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
+    let revokeDevice: ((deviceId: string) => void) | undefined
+    let resolveApproval: ((approved: boolean) => void) | undefined
+    const cancelApproval = vi.fn(() => resolveApproval?.(false))
+    const requestApproval = vi.fn(() => new Promise<boolean>((resolve) => {
+      resolveApproval = resolve
+    }))
+    const runtime = setupApp({
+      auth: {
+        token: '',
+        modulePairing: {
+          isPaired: () => false,
+          requestApproval,
+          remember: () => {},
+          cancelApproval,
+          subscribeRevocations(listener) {
+            revokeDevice = listener
+            return () => {
+              revokeDevice = undefined
+            }
+          },
+        },
+      },
+    })
+    const handler = wsHandler()
+    const modulePeer = createPeer('module-peer')
+    const moduleInstanceId = 'fabric-process-1'
+
+    handler.open?.(modulePeer.peer)
+    sendEvent(handler, modulePeer.peer, createPairingHelloEvent(moduleInstanceId, publicKey))
+    await vi.waitFor(() => {
+      expect(decodeEvents(modulePeer.sent).some(event => event.type === 'module:pairing:challenge')).toBe(true)
+    })
+    const challenge = decodeEvents(modulePeer.sent)
+      .find(event => event.type === 'module:pairing:challenge')!
+
+    // Revoking before the proof removes the one-shot challenge.
+    revokeDevice?.('device-1')
+    sendEvent(handler, modulePeer.peer, createPairingProofEvent({
+      moduleInstanceId,
+      requestId: challenge.data.requestId,
+      nonce: challenge.data.nonce,
+      publicKey,
+      privateKey: keyPair.privateKey,
+    }))
+    await vi.waitFor(() => {
+      expect(decodeEvents(modulePeer.sent)).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: 'error',
+          data: expect.objectContaining({ message: 'pairing-proof-invalid' }),
+        }),
+      ]))
+    })
+
+    // A fresh challenge can reach the approval stage, which revocation must
+    // cancel through the provider instead of leaving an auth race behind.
+    const secondPeer = createPeer('second-module-peer')
+    handler.open?.(secondPeer.peer)
+    sendEvent(handler, secondPeer.peer, createPairingHelloEvent('fabric-process-2', publicKey))
+    await vi.waitFor(() => {
+      expect(decodeEvents(secondPeer.sent).some(event => event.type === 'module:pairing:challenge')).toBe(true)
+    })
+    const secondChallenge = decodeEvents(secondPeer.sent)
+      .find(event => event.type === 'module:pairing:challenge')!
+    sendEvent(handler, secondPeer.peer, createPairingProofEvent({
+      moduleInstanceId: 'fabric-process-2',
+      requestId: secondChallenge.data.requestId,
+      nonce: secondChallenge.data.nonce,
+      publicKey,
+      privateKey: keyPair.privateKey,
+    }))
+    await vi.waitFor(() => expect(requestApproval).toHaveBeenCalledTimes(1))
+    revokeDevice?.('device-1')
+    expect(cancelApproval).toHaveBeenCalledWith(secondChallenge.data.requestId)
+    await vi.waitFor(() => {
+      expect(decodeEvents(secondPeer.sent)).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: 'error',
+          data: expect.objectContaining({ message: 'pairing-denied' }),
+        }),
+      ]))
+    })
+    expect(decodeEvents(secondPeer.sent).filter(event => event.type === 'module:authenticated')).toHaveLength(1)
 
     runtime.dispose()
   })

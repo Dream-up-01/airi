@@ -58,6 +58,8 @@ perception-screen:
   refresh: 重新整理
   refreshing: 正在重新整理…
   no-sources: 找不到可用的外部螢幕或視窗。
+  sampling-rate: 畫面檢查頻率
+  sampling-rate-option: '每秒 {rate} 次'
   consent: 我允許 AIRI 在本次工作階段中僅於本機觀察所選來源；我知道敏感頁面會自動暫停，並可隨時停止。
   sensitive-pause: 遇到敏感頁面時暫停分析
   start: 開始觀察
@@ -78,7 +80,7 @@ perception-screen:
   confirm-fact: 確認準確
   correct-fact: 並非如此
   clear-facts: 清除本次工作階段事實
-  capture-profile: '{resolution} · 目標 {cadence}'
+  capture-profile: '{resolution} · 每秒檢查 {rate} 次 · 分析器接納仍為每秒 0.2–1 影格'
   capture-counts: '取樣 {attempts} · 接受 {accepted} · 丟棄 {dropped} · 事實結果 {facts}'
   error-with-code: '桌面觀察無法繼續（{code}），沒有保留任何影格。'
   state:
@@ -100,7 +102,9 @@ perception-camera:
   starting: 正在啟動本機分析器…
   pause: 暫停
   stop: 停止並撤銷授權
-  capture-profile: 640×360 · MediaPipe/OpenCV 最高 10 Hz · YOLO 最高 2 Hz
+  sampling-rate: 攝影機取樣頻率
+  sampling-rate-option: '每秒 {rate} 次'
+  capture-profile: '640×360 · MediaPipe 目標每秒 {rate} 次 · OpenCV 最高每秒 10 次 · YOLO 最高每秒 2 次'
   capture-counts: '工作影格 {observations} · 丟棄 {dropped} · 新鮮事實 {facts}'
   error-with-code: '本機攝影機感知無法繼續（{code}），沒有保留任何影格。'
   analyzer:
@@ -127,8 +131,9 @@ perception-cloud:
   title: 千問雲端感知
   endpoint: '地域：{region}'
   region-label: 中國內地 · 華北 2（北京）
+  region-boundary: 中國內地 Endpoint 的資料不會跨地域或跨境傳輸。
   no-upload: 目前沒有雲端上傳。每次感知工作階段都需要分別授權畫面與麥克風音訊。
-  upload-active: 目前正在向千問上傳已選來源的畫面與麥克風音訊。原始資料只在記憶體中短暫存在，可隨時立即停止。
+  upload-active: 目前正在向千問上傳已選來源的畫面與麥克風音訊。AIRI 本機端的原始音訊與畫面僅在記憶體中短暫存在並在處理後釋放；已傳送至千問的資料可能進入保留一個月的服務日誌，可隨時立即停止。
   refresh: 重新整理雲端狀態
   validate: 驗證設定狀態
   validation-complete: 設定檢查已完成，雲端上傳仍未啟動。
@@ -152,12 +157,13 @@ perception-cloud:
   output: 輸出
   text-only-manual: 僅文字客觀 JSON · Manual 回應控制
   retention: 資料保留
-  retention-value: 控制台可用的最短保留 · 不用於訓練 · 尚待控制台驗證
+  retention-value: 服務日誌保留一個月 · 斷線立即清除模型工作階段上下文 · 不用於訓練、改進、評估或人工審閱
   budget-title: 費用護欄
   screen-session-title: 螢幕雲端感知工作階段
   refresh-sources: 重新整理螢幕與視窗來源
   select-screen-source: 選擇一個螢幕或視窗
-  screen-audio-consent: 我授權在本次工作階段中將所選螢幕畫面和真實麥克風音訊上傳至千問。模型轉寫與音訊輸出不會進入聊天。
+  screen-frame-consent: 我授權在本次工作階段中將所選螢幕畫面上傳至千問；上傳畫面可能進入保留一個月的服務日誌。
+  screen-audio-consent: 我單獨授權在本次螢幕工作階段中將真實麥克風音訊上傳至千問；上傳音訊可能進入保留一個月的服務日誌。模型轉寫與音訊輸出不會進入聊天。
   capture-state: 擷取狀態
   windows: 感知視窗
   facts: 新鮮事實
@@ -166,7 +172,11 @@ perception-cloud:
   stop-screen: 停止並撤銷授權
   camera-session-title: 攝影機雲端感知工作階段
   camera-mixed-description: 本機 MediaPipe、OpenCV 與 YOLO 會繼續執行；只在偵測到有人且畫面發生變化時，才以最高 1 FPS 向千問提交影格。
-  camera-audio-consent: 我分別授權在本次工作階段中將攝影機畫面和真實麥克風音訊上傳至千問。
+  sampling-rate: 取樣嘗試頻率
+  sampling-rate-option: '每秒 {rate} 次'
+  sampling-rate-limit: '目標每秒 {target} 次；雲端上傳仍限制為最高每秒 {limit} 次。'
+  camera-frame-consent: 我授權在本次工作階段中將攝影機畫面上傳至千問；上傳畫面可能進入保留一個月的服務日誌。
+  camera-audio-consent: 我單獨授權在本次攝影機工作階段中將真實麥克風音訊上傳至千問；上傳音訊可能進入保留一個月的服務日誌。模型轉寫與音訊輸出不會進入聊天。
   camera-privacy-mode: 隱私模式
   resolution: 解析度
   start-camera: 開啟攝影機雲端感知

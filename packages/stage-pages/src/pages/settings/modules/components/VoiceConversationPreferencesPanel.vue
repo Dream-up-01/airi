@@ -69,7 +69,7 @@ const cloudPrivacyAcknowledged = computed({
       <select v-model="interruptionPolicy" class="border border-neutral-300 rounded-lg bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-900">
         <option value="disabled">{{ t('settings.pages.modules.hearing.voice-conversation.interruptions.disabled') }}</option>
         <option value="pushToInterrupt">{{ t('settings.pages.modules.hearing.voice-conversation.interruptions.push') }}</option>
-        <option value="vadBargeIn" disabled>{{ t('settings.pages.modules.hearing.voice-conversation.interruptions.vad-unavailable') }}</option>
+        <option value="vadBargeIn">{{ t('settings.pages.modules.hearing.voice-conversation.interruptions.vad') }}</option>
       </select>
     </label>
 

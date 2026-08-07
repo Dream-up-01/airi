@@ -372,6 +372,7 @@ pages:
         invalid_artistry_json: 'Error: Artistry provider options contains invalid JSON.'
       none: None
     modules: 模組
+    name: 名稱
     name_asc: 名稱 (A-Z)
     name_desc: 名稱 (Z-A)
     no_cards: 還沒有任何角色卡，點擊上方按鈕上傳一個吧！
@@ -657,6 +658,77 @@ pages:
     hearing:
       description: 語音辨識
       title: 聽覺
+      voice-conversation:
+        preferences:
+          title: 語音對話
+          description: 麥克風輪次與回聲保護打斷的安全執行時偏好。
+          mode: 對話模式
+          interruption-policy: 打斷策略
+          vad-threshold: VAD 閾值
+          min-speech: 最短語音時長
+          trailing-silence: 尾部靜音時長
+          cloud-privacy: 我了解已設定的雲端 TTS 會接收助手文字
+          cloud-privacy-description: 麥克風音訊仍只會進入已設定的 ASR 路徑；雲端 TTS 只會接收通過檢查的助手文字。
+        modes:
+          vad: VAD 輪流說話
+          streaming: 串流 ASR
+          push-to-talk-unavailable: 按住說話（目前版本不可用）
+        interruptions:
+          disabled: 關閉
+          push: 按下打斷
+          vad: VAD 自動插話（已啟用回聲保護；請在你的麥克風上驗證）
+        local-asr:
+          title: 本機 ASR 模型切換
+          description: Qwen 停止時仍會顯示；只有在你點擊後才會啟動本機服務，並在健康檢查通過後切換。
+          current: '目前：{provider} / {model}'
+          current-other: 目前 ASR 不在 M2 宣告的本機模型矩陣中。
+          qwen-label: Qwen3-ASR 0.6B（本機串流）
+          sensevoice-label: SenseVoice-Small（本機備用）
+          use-qwen: 啟動並切換到 Qwen3-ASR
+          use-sensevoice: 切換到 SenseVoice
+          in-use: '正在使用：{provider}'
+          selected: 目前選取
+          selected-indicator: 綠色圓點表示目前選取的 Provider；每次切換都會先啟動並重新檢查健康狀態。
+          switching: 正在啟動、健康檢查並切換本機 ASR…
+          configure: 設定 Provider 位址
+          errors:
+            desktop_required: 只有 AIRI 桌面版可以啟動本機 ASR。
+            launcher_missing: 此安裝缺少所選本機 ASR 的啟動程式。
+            launch_failed: 無法啟動所選本機 ASR，請檢查本機模型環境。
+            startup_timeout: 所選本機 ASR 未能在啟動逾時前就緒。
+            app_stopping: AIRI 正在關閉，無法切換本機 ASR。
+            start_cancelled: 本機 ASR 啟動時被停止，本次啟動已取消。
+            validation_failed: 本機 ASR 未通過健康檢查，已保留原模型。
+            unexpected: 切換本機 ASR 時發生錯誤，已保留原模型。
+          notices:
+            previous-service-not-managed: 舊服務不是由目前 AIRI 工作階段啟動，因此沒有強制關閉；如仍在執行，請手動關閉其終端機。
+            previous-service-stop-failed: 舊本機服務未能關閉，因此未切換模型；請手動關閉後再試。
+            runtime-quiesce-failed: 目前語音執行時未能乾淨停止，因此未切換本機 ASR。
+            runtime-quiesce-timeout: 目前語音執行時未確認停止請求，因此未切換本機 ASR。
+        diagnostics:
+          title: 語音診斷
+          description: 僅顯示執行時能力和延遲摘要，不顯示轉錄正文或音訊內容。
+          asr: ASR Provider / 模型
+          asr-streaming: ASR 串流輸入
+          tts: TTS Provider / 模型 / 聲線
+          tts-streaming: TTS 傳輸能力
+          supported: 支援
+          not-supported: 不支援
+          rest-aggregated: REST/SSE 聚合音訊（非真正串流）
+          streaming: 真正串流音訊
+          not-declared: Provider 未宣告
+          last-error: 最近錯誤碼
+          asr-latency: 語音開始到第一個增量
+          tts-latency: 請求到第一段音訊
+          style-warnings: 聲線風格能力警告（開發模式）
+          none: 暫無資料
+          warnings:
+            voice-style.unsupported-style: 目前 Provider 不支援風格控制，已降級為 neutral 或 warm。
+            voice-style.unsupported-prosody: 目前 Provider 不支援韻律控制，已移除語速、音高和音量提示。
+            voice-style.clamped-rate: 語速已限制在 Provider 支援範圍內。
+            voice-style.clamped-pitch: 音高已限制在 Provider 支援範圍內。
+            voice-style.clamped-volume: 音量已限制在 Provider 支援範圍內。
+            voice-style.unsafe-preferred-style: 目前安全策略已停用 playful 風格。
       sections:
         section:
           provider-selection:
@@ -687,6 +759,22 @@ pages:
       configured: Discord 已正確設定！
     speech:
       description: 語音合成
+      local-service-switch:
+        switching: 正在啟動並檢查本機語音服務…
+        errors:
+          desktop_required: 只有 AIRI 桌面版可以啟動本機語音服務。
+          launcher_missing: 此安裝缺少本機語音服務啟動程式。
+          launch_failed: 本機語音服務啟動失敗，請檢查模型環境。
+          startup_timeout: 本機語音服務未能在啟動逾時前就緒。
+          app_stopping: AIRI 正在關閉，無法切換本機語音服務。
+          start_cancelled: 本機語音服務啟動時被停止，本次啟動已取消。
+          validation_failed: 本機語音服務未通過健康檢查，已保留原 Provider。
+          unexpected: 切換語音 Provider 時發生錯誤，已保留原 Provider。
+        notices:
+          previous-service-not-managed: 舊服務不是由目前 AIRI 工作階段啟動，因此沒有強制關閉；如仍在執行，請手動關閉其終端機。
+          previous-service-stop-failed: 舊本機服務未能關閉，因此未切換 Provider；請手動關閉後再試。
+          runtime-quiesce-failed: 目前語音執行時未能乾淨停止，因此未發佈新的語音設定。
+          runtime-quiesce-timeout: 目前語音執行時未確認停止請求，因此未發佈新的語音設定。
       sections:
         section:
           playground:
@@ -1212,6 +1300,7 @@ pages:
           title: 實驗平台
           validation:
             error-missing-api-key: 需要填寫 API Key 才能使用喔！
+            error-playback: 產生的音訊無法播放。
         title: ElevenLabs (11labs)
       kokoro-local:
         description: 基於 Kokoro-82M 的本地文字轉語音。

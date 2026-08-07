@@ -3,7 +3,8 @@ import type { SpeechProviderWithExtraOptions } from '@xsai-ext/providers/utils'
 const MINIMAX_GLOBAL_BASE_URL = 'https://api.minimax.io'
 const MINIMAX_GLOBAL_LOW_LATENCY_BASE_URL = 'https://api-uw.minimax.io'
 const MINIMAX_CHINA_BASE_URL = 'https://api.minimaxi.com'
-const DEFAULT_MINIMAX_SPEECH_MODEL = 'speech-2.8-turbo'
+export const MINIMAX_SPEECH_DEFAULT_MODEL = 'speech-2.8-turbo' as const
+export const MINIMAX_SPEECH_DEFAULT_VOICE = 'AiriFireflyCN20260710_2011R7' as const
 const SUPPORTED_MINIMAX_SPEECH_MODELS = new Set<MiniMaxSpeechModel>([
   'speech-2.8-turbo',
   'speech-2.8-hd',
@@ -240,7 +241,7 @@ export function createMiniMaxSpeechProvider(
     throw new Error('MiniMax API endpoint is invalid')
 
   const configuredModelValue = stringValue(config.model)
-  const configuredModel = normalizeMiniMaxSpeechModel(configuredModelValue || DEFAULT_MINIMAX_SPEECH_MODEL)
+  const configuredModel = normalizeMiniMaxSpeechModel(configuredModelValue || MINIMAX_SPEECH_DEFAULT_MODEL)
   if (!configuredModel)
     throw new Error('MiniMax speech model is unsupported')
 
@@ -260,7 +261,7 @@ export function createMiniMaxSpeechProvider(
 
           const request = JSON.parse(init.body) as Record<string, unknown>
           const text = stringValue(request.input)
-          const voiceId = stringValue(request.voice) || 'English_Graceful_Lady'
+          const voiceId = stringValue(request.voice) || MINIMAX_SPEECH_DEFAULT_VOICE
           const emotion = miniMaxEmotion(requestConfig?.voiceStyle)
           if (!text)
             throw new Error('MiniMax TTS input is required')

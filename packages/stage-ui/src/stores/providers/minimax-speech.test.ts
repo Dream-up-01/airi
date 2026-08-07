@@ -13,6 +13,25 @@ function jsonResponse(payload: unknown): Response {
 }
 
 describe('miniMax speech provider', () => {
+  it('uses the Turbo and Firefly defaults when model and voice are omitted', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      data: { audio: 'aabb', status: 2 },
+      base_resp: { status_code: 0 },
+    }))
+    const provider = createMiniMaxSpeechProvider({ apiKey: 'test-key' }, fetcher)
+
+    await generateSpeech({
+      ...provider.speech(''),
+      input: '你好',
+      voice: '',
+    })
+
+    expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string)).toMatchObject({
+      model: 'speech-2.8-turbo',
+      voice_setting: { voice_id: 'AiriFireflyCN20260710_2011R7' },
+    })
+  })
+
   it('accepts only official HTTPS service origins', () => {
     expect(normalizeMiniMaxSpeechBaseUrl(undefined)).toBe('https://api.minimax.io')
     expect(normalizeMiniMaxSpeechBaseUrl('https://api-uw.minimax.io/')).toBe('https://api-uw.minimax.io')

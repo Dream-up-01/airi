@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import type { PerceptionSamplingRate } from '@proj-airi/stage-ui/domains/perception'
+
 import type { QwenCloudControlStatus } from '../../../shared/eventa/perception-cloud'
 import type { ProductionScreenSource } from '../../services/perception/production-screen-capture'
 import type { QwenCloudCameraStatus } from '../../services/perception/qwen-cloud-camera-coordinator'
 import type { QwenCloudScreenStatus } from '../../services/perception/qwen-cloud-screen-coordinator'
 
+import { PERCEPTION_CLOUD_MAX_EFFECTIVE_RATE, PERCEPTION_SAMPLING_RATES } from '@proj-airi/stage-ui/domains/perception'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -23,17 +26,21 @@ const emit = defineEmits<{
   validate: []
   stop: []
   refreshScreenSources: []
-  startScreen: [sourceId: string, consentConfirmed: boolean]
+  startScreen: [sourceId: string, frameConsentConfirmed: boolean, audioConsentConfirmed: boolean]
   pauseScreen: []
   stopScreen: []
-  startCamera: [consentConfirmed: boolean]
+  startCamera: [frameConsentConfirmed: boolean, audioConsentConfirmed: boolean]
   pauseCamera: []
   stopCamera: []
   cameraPrivacyMode: [enabled: boolean]
 }>()
 const selectedScreenSourceId = defineModel<string>('selectedScreenSourceId', { required: true })
-const screenConsentConfirmed = defineModel<boolean>('screenConsentConfirmed', { required: true })
-const cameraConsentConfirmed = defineModel<boolean>('cameraConsentConfirmed', { required: true })
+const screenFrameConsentConfirmed = defineModel<boolean>('screenFrameConsentConfirmed', { required: true })
+const screenAudioConsentConfirmed = defineModel<boolean>('screenAudioConsentConfirmed', { required: true })
+const cameraFrameConsentConfirmed = defineModel<boolean>('cameraFrameConsentConfirmed', { required: true })
+const cameraAudioConsentConfirmed = defineModel<boolean>('cameraAudioConsentConfirmed', { required: true })
+const screenSamplingRate = defineModel<PerceptionSamplingRate>('screenSamplingRate', { required: true })
+const cameraSamplingRate = defineModel<PerceptionSamplingRate>('cameraSamplingRate', { required: true })
 
 const { t } = useI18n()
 const budgetLimits = { session: 5, day: 10, month: 50 } as const
@@ -56,13 +63,20 @@ const budgets = computed(() => props.status
     ]
   : [])
 const screenRunning = computed(() => props.screenStatus.captureState === 'running')
+const screenBusy = computed(() => props.screenStatus.captureState === 'starting' || screenRunning.value)
 const canStartScreen = computed(() => props.status?.state === 'ready'
   && !!selectedScreenSourceId.value
-  && screenConsentConfirmed.value
-  && !screenRunning.value)
+  && screenFrameConsentConfirmed.value
+  && screenAudioConsentConfirmed.value
+  && !screenBusy.value)
 const cameraRunning = computed(() => props.cameraStatus.captureState === 'running')
-const canStartCamera = computed(() => props.status?.state === 'ready' && cameraConsentConfirmed.value && !cameraRunning.value)
+const cameraBusy = computed(() => props.cameraStatus.captureState === 'starting' || cameraRunning.value)
+const canStartCamera = computed(() => props.status?.state === 'ready'
+  && cameraFrameConsentConfirmed.value
+  && cameraAudioConsentConfirmed.value
+  && !cameraBusy.value)
 const uploadActive = computed(() => props.screenStatus.uploadActive || props.cameraStatus.uploadActive)
+const providerDataBoundaryConfirmed = computed(() => props.status?.providerDataBoundary === 'cn-mainland-no-cross-region-or-cross-border')
 </script>
 
 <template>
@@ -82,6 +96,9 @@ const uploadActive = computed(() => props.screenStatus.uploadActive || props.cam
         </div>
         <p mt-1 text-xs text-neutral-600 dark:text-neutral-300>
           {{ t('tamagotchi.stage.perception-cloud.endpoint', { region: t('tamagotchi.stage.perception-cloud.region-label') }) }}
+        </p>
+        <p v-if="providerDataBoundaryConfirmed" mt-1 text-xs text-neutral-600 dark:text-neutral-300>
+          {{ t('tamagotchi.stage.perception-cloud.region-boundary') }}
         </p>
       </div>
       <button
@@ -130,8 +147,27 @@ const uploadActive = computed(() => props.screenStatus.uploadActive || props.cam
       <p mt-2 text-xs text-neutral-600 dark:text-neutral-300>
         {{ t('tamagotchi.stage.perception-cloud.camera-mixed-description') }}
       </p>
+      <label mt-3 block text-xs font-medium for="cloud-camera-sampling-rate">
+        {{ t('tamagotchi.stage.perception-cloud.sampling-rate') }}
+      </label>
+      <select
+        id="cloud-camera-sampling-rate"
+        v-model.number="cameraSamplingRate"
+        mt-1 w-full border border-neutral-300 rounded-lg bg-transparent px-3 py-2 text-sm dark:border-neutral-700
+      >
+        <option v-for="rate in PERCEPTION_SAMPLING_RATES" :key="rate" :value="rate">
+          {{ t('tamagotchi.stage.perception-cloud.sampling-rate-option', { rate }) }}
+        </option>
+      </select>
+      <p mt-1 text-xs text-neutral-500>
+        {{ t('tamagotchi.stage.perception-cloud.sampling-rate-limit', { target: cameraSamplingRate, limit: PERCEPTION_CLOUD_MAX_EFFECTIVE_RATE.camera }) }}
+      </p>
       <label mt-3 flex items-start gap-2 text-xs>
-        <input v-model="cameraConsentConfirmed" type="checkbox" mt-0.5 :disabled="cameraRunning">
+        <input v-model="cameraFrameConsentConfirmed" type="checkbox" mt-0.5 :disabled="cameraBusy">
+        <span>{{ t('tamagotchi.stage.perception-cloud.camera-frame-consent') }}</span>
+      </label>
+      <label mt-2 flex items-start gap-2 text-xs>
+        <input v-model="cameraAudioConsentConfirmed" type="checkbox" mt-0.5 :disabled="cameraBusy">
         <span>{{ t('tamagotchi.stage.perception-cloud.camera-audio-consent') }}</span>
       </label>
       <label mt-3 flex items-center justify-between gap-3 text-xs>
@@ -169,7 +205,7 @@ const uploadActive = computed(() => props.screenStatus.uploadActive || props.cam
           type="button"
           rounded-lg bg-blue-600 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50
           :disabled="!canStartCamera"
-          @click="emit('startCamera', cameraConsentConfirmed)"
+          @click="emit('startCamera', cameraFrameConsentConfirmed, cameraAudioConsentConfirmed)"
         >
           {{ t('tamagotchi.stage.perception-cloud.start-camera') }}
         </button>
@@ -192,7 +228,7 @@ const uploadActive = computed(() => props.screenStatus.uploadActive || props.cam
         <button
           type="button"
           size-7 flex items-center justify-center rounded-lg disabled:cursor-wait hover:bg-neutral-500:10 disabled:opacity-50
-          :disabled="refreshingScreenSources || screenRunning"
+          :disabled="refreshingScreenSources || screenBusy"
           :aria-label="t('tamagotchi.stage.perception-cloud.refresh-sources')"
           :title="t('tamagotchi.stage.perception-cloud.refresh-sources')"
           @click="emit('refreshScreenSources')"
@@ -201,9 +237,11 @@ const uploadActive = computed(() => props.screenStatus.uploadActive || props.cam
         </button>
       </div>
       <select
+        id="cloud-screen-source"
         v-model="selectedScreenSourceId"
         mt-2 w-full border border-neutral-300 rounded-lg bg-transparent px-3 py-2 text-sm outline-none dark:border-neutral-700 disabled:opacity-50
-        :disabled="screenRunning"
+        :disabled="screenBusy"
+        :aria-label="t('tamagotchi.stage.perception-cloud.select-screen-source')"
       >
         <option value="">
           {{ t('tamagotchi.stage.perception-cloud.select-screen-source') }}
@@ -212,8 +250,27 @@ const uploadActive = computed(() => props.screenStatus.uploadActive || props.cam
           {{ source.name }}
         </option>
       </select>
+      <label mt-3 block text-xs font-medium for="cloud-screen-sampling-rate">
+        {{ t('tamagotchi.stage.perception-cloud.sampling-rate') }}
+      </label>
+      <select
+        id="cloud-screen-sampling-rate"
+        v-model.number="screenSamplingRate"
+        mt-1 w-full border border-neutral-300 rounded-lg bg-transparent px-3 py-2 text-sm dark:border-neutral-700
+      >
+        <option v-for="rate in PERCEPTION_SAMPLING_RATES" :key="rate" :value="rate">
+          {{ t('tamagotchi.stage.perception-cloud.sampling-rate-option', { rate }) }}
+        </option>
+      </select>
+      <p mt-1 text-xs text-neutral-500>
+        {{ t('tamagotchi.stage.perception-cloud.sampling-rate-limit', { target: screenSamplingRate, limit: PERCEPTION_CLOUD_MAX_EFFECTIVE_RATE.screen }) }}
+      </p>
       <label mt-3 flex items-start gap-2 text-xs>
-        <input v-model="screenConsentConfirmed" type="checkbox" mt-0.5 :disabled="screenRunning">
+        <input v-model="screenFrameConsentConfirmed" type="checkbox" mt-0.5 :disabled="screenBusy">
+        <span>{{ t('tamagotchi.stage.perception-cloud.screen-frame-consent') }}</span>
+      </label>
+      <label mt-2 flex items-start gap-2 text-xs>
+        <input v-model="screenAudioConsentConfirmed" type="checkbox" mt-0.5 :disabled="screenBusy">
         <span>{{ t('tamagotchi.stage.perception-cloud.screen-audio-consent') }}</span>
       </label>
       <dl class="grid grid-cols-[7rem_1fr]" mt-3 gap-x-3 gap-y-1.5 text-xs>
@@ -239,7 +296,7 @@ const uploadActive = computed(() => props.screenStatus.uploadActive || props.cam
           type="button"
           rounded-lg bg-blue-600 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50
           :disabled="!canStartScreen"
-          @click="emit('startScreen', selectedScreenSourceId, screenConsentConfirmed)"
+          @click="emit('startScreen', selectedScreenSourceId, screenFrameConsentConfirmed, screenAudioConsentConfirmed)"
         >
           {{ t('tamagotchi.stage.perception-cloud.start-screen') }}
         </button>

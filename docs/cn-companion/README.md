@@ -19,6 +19,7 @@
 - 重启后禁用 companion 并恢复之前角色
 - Companion 文本输出采用“验证后释放”策略，避免 unsafe 文本、CALL token 或未验证特殊 token 先进入 UI/TTS/工具链
 - 角色经历问题可按预设回答，不再默认退回“我是 AI，没有经历”；同时通过输出检查限制重大身世、现实行动和当前环境编造
+- 共享导入 UI 的 `stage-pages` Vitest browser/component 回归测试，并已接入根 `test:run`
 
 主 Provider `deepseek/deepseek-v4-flash` 已完成三轮 T01-T13 验收；备用 Provider `ollama/gemma4:e4b` 已完成关键安全烟测。用户已要求停止继续模型验收，因此未再扩大备用模型完整三轮矩阵。
 
@@ -28,9 +29,8 @@
 - 当前场景策略为可解释规则，不是通用情绪分类模型
 - Companion 模式下安全输出会在验证后一次性释放；普通非 Companion 聊天仍保持原流式行为
 - voice ID 和 Provider 运行时故障无法在预设激活前完全验证
-- 共享导入 UI 已做人工视觉验证，但尚未建立 `stage-pages` 的 Vitest browser/component 回归测试
 - 尚未实现语音与表情联动
 
 ## 下一阶段
 
-补齐备用模型完整矩阵和共享导入 UI 的 browser/component 回归测试；随后进入中文实时语音里程碑。
+补齐备用模型完整矩阵；随后进入中文实时语音里程碑。

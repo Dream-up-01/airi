@@ -35,6 +35,14 @@ describe('qwen cloud Eventa control boundary', () => {
     const invoke = defineInvoke(context, electronQwenCloudControlStatus)
     const response = await invoke({ contractVersion: QWEN_CLOUD_CONTROL_VERSION, requestId: 'request-1' })
     expect(parseQwenCloudControlStatus(response).ok).toBe(true)
+    expect(response).toMatchObject({
+      contractVersion: 'perception-cloud-control/v0.4',
+      providerPrivacyProfileId: 'qwen-realtime-cn-support-2026-07-27',
+      providerRetention: 'service-logs-one-month',
+      providerDataUse: 'not-used-for-training-improvement-evaluation-or-human-review',
+      providerDataBoundary: 'cn-mainland-no-cross-region-or-cross-border',
+      sessionContextRetention: 'cleared-on-disconnect',
+    })
     expect(response.uploadActive).toBe(false)
     expect(JSON.stringify(response)).not.toMatch(/workspace(Id|Value)|"apiKey"|secret(Value)?|Bearer/iu)
   })

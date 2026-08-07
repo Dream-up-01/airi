@@ -1,4 +1,4 @@
-import type { PerceptionContextProjection, PerceptionObservabilitySnapshot } from '@proj-airi/stage-ui/domains/perception'
+import type { PerceptionContextProjection, PerceptionObservabilitySnapshot, PerceptionSamplingRate } from '@proj-airi/stage-ui/domains/perception'
 import type { ComputedRef, InjectionKey } from 'vue'
 
 import type { PerceptionRuntimeStatusWire } from '../../../shared/eventa/perception-runtime-status'
@@ -6,12 +6,13 @@ import type {
   LocalScreenPerceptionStatus,
 } from '../../services/perception/local-screen-perception-coordinator'
 import type { ProductionScreenSource } from '../../services/perception/production-screen-capture'
+import type { PerceptionSamplingSettings } from './use-perception-sampling-settings'
 
 import { useSpeakingStore } from '@proj-airi/stage-ui/stores/audio'
 import { createPerceptionContextMessage, PERCEPTION_CONTEXT_SOURCE_ID } from '@proj-airi/stage-ui/stores/chat/context-providers'
 import { useChatContextStore } from '@proj-airi/stage-ui/stores/chat/context-store'
 import { useVoiceConversationStore } from '@proj-airi/stage-ui/stores/voiceConversation'
-import { computed, inject, onScopeDispose, provide, shallowRef } from 'vue'
+import { computed, inject, onScopeDispose, provide, shallowRef, watch } from 'vue'
 
 import { LocalScreenConsentClient } from '../../services/perception/local-screen-consent-client'
 import { LocalScreenPerceptionCoordinator } from '../../services/perception/local-screen-perception-coordinator'
@@ -19,9 +20,11 @@ import { createPerceptionContextProjectionPeer } from '../../services/perception
 import { createPerceptionRuntimeStatusPeer } from '../../services/perception/perception-runtime-status-sync'
 import { productionPerceptionOwnerProvider } from '../../services/perception/production-perception-owner'
 import { ProductionScreenCapture } from '../../services/perception/production-screen-capture'
+import { createPerceptionSamplingSettings } from './use-perception-sampling-settings'
 
 export interface LocalScreenPerceptionContext {
   status: ComputedRef<LocalScreenPerceptionStatus>
+  samplingRate: ComputedRef<PerceptionSamplingRate>
   sources: ComputedRef<readonly ProductionScreenSource[]>
   isRefreshingSources: ComputedRef<boolean>
   uiErrorCode: ComputedRef<string | undefined>
@@ -37,17 +40,20 @@ export interface LocalScreenPerceptionContext {
   confirmFact: (factId: string) => void
   retractFact: (factId: string) => void
   clearFacts: () => void
+  setSamplingRate: (rate: PerceptionSamplingRate) => void
 }
 
 const localScreenPerceptionKey: InjectionKey<LocalScreenPerceptionContext> = Symbol('local-screen-perception')
 
-export function provideLocalScreenPerception(): LocalScreenPerceptionContext {
+export function provideLocalScreenPerception(options: { samplingSettings?: PerceptionSamplingSettings } = {}): LocalScreenPerceptionContext {
+  const samplingSettings = options.samplingSettings ?? createPerceptionSamplingSettings()
   const chatContext = useChatContextStore()
   const speaking = useSpeakingStore()
   const voiceConversation = useVoiceConversationStore()
   const status = shallowRef<LocalScreenPerceptionStatus>({
     state: 'idle',
     generation: 0,
+    samplingRate: samplingSettings.screen.value,
     acceptedFactCount: 0,
     captureAttemptCount: 0,
     acceptedFrameCount: 0,
@@ -95,6 +101,7 @@ export function provideLocalScreenPerception(): LocalScreenPerceptionContext {
     capture: new ProductionScreenCapture(),
     consent: new LocalScreenConsentClient(),
     ownerProvider: productionPerceptionOwnerProvider,
+    samplingRate: samplingSettings.screen.value,
     isResourceConstrained: () => speaking.nowSpeaking || voiceConversation.isActive,
     onStatus: (next) => {
       status.value = next
@@ -108,6 +115,7 @@ export function provideLocalScreenPerception(): LocalScreenPerceptionContext {
     },
     onObservability: next => observability.value = next,
   })
+  const stopSamplingWatch = watch(samplingSettings.screen, rate => coordinator.setSamplingRate(rate))
   const readonlyStatus = computed(() => status.value)
   const readonlySources = computed(() => sources.value as readonly ProductionScreenSource[])
   const readonlyRefreshingSources = computed(() => isRefreshingSources.value)
@@ -156,6 +164,7 @@ export function provideLocalScreenPerception(): LocalScreenPerceptionContext {
 
   const context: LocalScreenPerceptionContext = {
     status: readonlyStatus,
+    samplingRate: computed(() => status.value.samplingRate),
     sources: readonlySources,
     isRefreshingSources: readonlyRefreshingSources,
     uiErrorCode: readonlyUiErrorCode,
@@ -171,6 +180,7 @@ export function provideLocalScreenPerception(): LocalScreenPerceptionContext {
     confirmFact: factId => coordinator.confirmFact(factId),
     retractFact: factId => coordinator.retractFact(factId),
     clearFacts: () => coordinator.clearFacts(),
+    setSamplingRate: rate => samplingSettings.set('screen', rate),
   }
   provide(localScreenPerceptionKey, context)
   onScopeDispose(() => {
@@ -178,6 +188,7 @@ export function provideLocalScreenPerception(): LocalScreenPerceptionContext {
       clearTimeout(projectionExpiryTimer)
     projectionPeer.dispose()
     runtimeStatusPeer.dispose()
+    stopSamplingWatch()
     chatContext.retractContextSource(PERCEPTION_CONTEXT_SOURCE_ID)
     void coordinator.dispose()
   })

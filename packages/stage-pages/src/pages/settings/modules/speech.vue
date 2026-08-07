@@ -38,7 +38,12 @@ import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink } from 'vue-router'
 
-import { startLocalVoiceService, stopLocalVoiceService } from '../../../composables/use-local-voice-service-start'
+import { startLocalVoiceService } from '../../../composables/use-local-voice-service-start'
+import {
+  isManagedLocalVoiceServiceEndpoint,
+  quiesceVoiceRuntimeForSwitch,
+  stopAndDisposePreviousVoiceService,
+} from '../../../composables/use-local-voice-service-switch'
 
 const { t } = useI18n()
 const providersStore = useProvidersStore()
@@ -84,7 +89,14 @@ const audioPlayer = ref<HTMLAudioElement | null>(null)
 const errorMessage = ref('')
 const speechProviderSwitchingId = shallowRef<string>()
 const speechProviderSwitchErrorCode = shallowRef<LocalVoiceServiceStartErrorCode | 'validation_failed' | 'unexpected'>()
-const speechProviderSwitchNoticeCode = shallowRef<'previous-service-not-managed' | 'previous-service-stop-failed'>()
+const speechProviderSwitchNoticeCode = shallowRef<
+  | 'previous-service-not-managed'
+  | 'previous-service-stop-failed'
+  | 'runtime-quiesce-failed'
+  | 'runtime-quiesce-timeout'
+>()
+const speechSettingsSwitching = shallowRef(false)
+let speechSettingsSwitchGeneration = 0
 let lastOfficialTtsExposureKey = ''
 
 const speechProviderSwitchError = computed(() => speechProviderSwitchErrorCode.value
@@ -122,7 +134,22 @@ const selectableSpeechSources = computed(() => {
       description: metadata.localizedDescription,
     }))
 
+  // Keep the selected MiniMax default visible before credentials are entered.
+  // It is a selection state, not an activation claim; the runtime readiness
+  // gate still comes from speechStore.configured.
+  const selectedUnconfiguredSource = allAudioSpeechProvidersMetadata.value
+    .filter(metadata => metadata.id === activeSpeechProvider.value)
+    .filter(metadata => metadata.id !== 'speech-noop' && metadata.id !== OFFICIAL_SPEECH_STREAMING_PROVIDER_ID)
+    .filter(metadata => !configuredSpeechProvidersMetadata.value.some(provider => provider.id === metadata.id))
+    .map(metadata => ({
+      id: metadata.id,
+      providerId: metadata.id,
+      title: metadata.localizedName || 'Unknown',
+      description: metadata.localizedDescription,
+    }))
+
   return [
+    ...selectedUnconfiguredSource,
     ...configuredSources,
     ...allAudioSpeechProvidersMetadata.value
       .filter(metadata => metadata.id === 'speech-noop')
@@ -221,8 +248,7 @@ const displayedVoiceOptions = computed(() => {
 const displayedSpeechVoiceId = computed({
   get: () => activeSpeechVoiceId.value,
   set: (value: string) => {
-    manageVoiceConversationProfile()
-    activeSpeechVoiceId.value = value
+    void selectSpeechVoiceSelection(value)
   },
 })
 
@@ -335,12 +361,31 @@ async function selectSpeechSource(sourceId: string) {
   speechProviderSwitchNoticeCode.value = undefined
 
   try {
+    const quiesceResult = await quiesceSpeechRuntime('provider-switch')
+    if (!quiesceResult)
+      return
+
+    const previousService = await stopAndDisposePreviousVoiceService({
+      previousProviderId: previousProvider,
+      nextProviderId: sourceId,
+      serviceIdForProvider: providerId => providerId === GPT_SOVITS_LOCAL_PROVIDER_ID ? 'gpt-sovits' : undefined,
+      disposeProvider: providerId => providersStore.disposeProviderInstance(providerId),
+    })
+    speechProviderSwitchNoticeCode.value = previousService.noticeCode
+    if (!previousService.ok) {
+      speechProviderSwitchNoticeCode.value = 'previous-service-stop-failed'
+      return
+    }
+
     if (sourceId === GPT_SOVITS_LOCAL_PROVIDER_ID) {
       providersStore.initializeProvider(sourceId)
-      const startResult = await startLocalVoiceService('gpt-sovits')
-      if (!startResult.ok) {
-        speechProviderSwitchErrorCode.value = startResult.errorCode
-        return
+      const providerConfig = providersStore.getProviderConfig(sourceId)
+      if (isManagedLocalVoiceServiceEndpoint('gpt-sovits', providerConfig?.baseUrl)) {
+        const startResult = await startLocalVoiceService('gpt-sovits')
+        if (!startResult.ok) {
+          speechProviderSwitchErrorCode.value = startResult.errorCode
+          return
+        }
       }
 
       await providersStore.disposeProviderInstance(sourceId)
@@ -353,15 +398,6 @@ async function selectSpeechSource(sourceId: string) {
 
     activeSpeechProvider.value = sourceId
     manageVoiceConversationProfile()
-
-    if (previousProvider === GPT_SOVITS_LOCAL_PROVIDER_ID && sourceId !== previousProvider) {
-      const stopResult = await stopLocalVoiceService('gpt-sovits')
-      if (!stopResult.ok)
-        speechProviderSwitchNoticeCode.value = 'previous-service-stop-failed'
-      else if (!stopResult.stopped)
-        speechProviderSwitchNoticeCode.value = 'previous-service-not-managed'
-      await providersStore.disposeProviderInstance(previousProvider)
-    }
   }
   catch {
     speechProviderSwitchErrorCode.value = 'unexpected'
@@ -372,6 +408,16 @@ async function selectSpeechSource(sourceId: string) {
 }
 
 function selectSpeechModel(modelOptionId: string) {
+  void applySpeechModelSelection(modelOptionId)
+}
+
+async function applySpeechModelSelection(modelOptionId: string) {
+  if (!modelOptionId || speechSettingsSwitching.value)
+    return
+
+  if (!await quiesceSpeechRuntime('model-switch'))
+    return
+
   manageVoiceConversationProfile()
   const streamingModelId = modelIdFromStreamingOptionId(modelOptionId)
   const nextProvider = streamingModelId == null
@@ -388,6 +434,43 @@ function selectSpeechModel(modelOptionId: string) {
   }
 
   activeSpeechModel.value = nextModel
+}
+
+async function selectSpeechVoiceSelection(voiceId: string | undefined) {
+  if (!voiceId || speechSettingsSwitching.value || voiceId === activeSpeechVoiceId.value)
+    return
+
+  if (!await quiesceSpeechRuntime('voice-switch'))
+    return
+
+  manageVoiceConversationProfile()
+  activeSpeechVoiceId.value = voiceId
+  await selectSpeechVoice(voiceId)
+}
+
+async function quiesceSpeechRuntime(reason: 'provider-switch' | 'model-switch' | 'voice-switch') {
+  const generation = ++speechSettingsSwitchGeneration
+  speechSettingsSwitching.value = true
+  speechProviderSwitchNoticeCode.value = undefined
+
+  try {
+    const result = await quiesceVoiceRuntimeForSwitch({ reason })
+    if (generation !== speechSettingsSwitchGeneration)
+      return false
+
+    if (!result.ok) {
+      speechProviderSwitchNoticeCode.value = result.timedOut
+        ? 'runtime-quiesce-timeout'
+        : 'runtime-quiesce-failed'
+      return false
+    }
+
+    return true
+  }
+  finally {
+    if (generation === speechSettingsSwitchGeneration)
+      speechSettingsSwitching.value = false
+  }
 }
 
 /**

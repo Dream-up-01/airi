@@ -401,6 +401,8 @@ const lipSyncNode = ref<AudioNode>()
 async function playFunction(item: Parameters<Parameters<typeof createPlaybackManager<AudioBuffer>>[0]['play']>[0], signal: AbortSignal): Promise<void> {
   if (!audioContext || !item.audio)
     return
+  if (signal.aborted)
+    return
 
   // Ensure audio context is resumed (browsers suspend it by default until user interaction)
   if (audioContext.state === 'suspended') {
@@ -412,11 +414,21 @@ async function playFunction(item: Parameters<Parameters<typeof createPlaybackMan
     }
   }
 
+  if (signal.aborted)
+    return
+
+  const hadLipSync = lipSyncStarted.value
   if (stageModelRenderer.value === 'live2d' && !lipSyncStarted.value) {
     // NOTICE: Playback can be triggered by non-chat speech intents, so initialize
     // the wLipSync graph here before connecting the AudioBufferSourceNode.
     setupAnalyser()
     await setupLipSync()
+  }
+
+  if (signal.aborted) {
+    if (!hadLipSync)
+      resetLive2dLipSync()
+    return
   }
 
   const source = audioContext.createBufferSource()

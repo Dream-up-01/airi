@@ -13,6 +13,7 @@ const { t } = useI18n()
 const consentConfirmed = shallowRef(false)
 const state = perception.state
 const errorCode = computed(() => perception.lastControlErrorCode.value ?? minecraftStore.lastRejectionCode)
+const perceptionActive = computed(() => minecraftStore.perceptionEnabled || perception.hasRemoteOwner.value)
 
 const lastRuntimeUpdate = computed(() => {
   if (!minecraftStore.configured)
@@ -90,8 +91,8 @@ function enablePerception(): void {
       {{ t('tamagotchi.stage.perception-minecraft.waiting-help') }}
     </p>
 
-    <label v-if="!minecraftStore.perceptionEnabled" mt-4 flex items-start gap-2 text-xs :class="perception.hasRemoteOwner.value ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'">
-      <input v-model="consentConfirmed" type="checkbox" mt-0.5 :disabled="perception.hasRemoteOwner.value">
+    <label v-if="!perceptionActive" mt-4 flex cursor-pointer items-start gap-2 text-xs>
+      <input v-model="consentConfirmed" type="checkbox" mt-0.5>
       <span>{{ t('tamagotchi.stage.perception-minecraft.consent') }}</span>
     </label>
 
@@ -107,7 +108,7 @@ function enablePerception(): void {
 
     <div mt-4 flex flex-wrap justify-end gap-2>
       <button
-        v-if="minecraftStore.perceptionEnabled && !minecraftStore.perceptionPaused"
+        v-if="perceptionActive && state === 'running'"
         type="button"
         border border-amber-400 rounded-xl px-3 py-2 text-sm text-amber-700 dark:text-amber-300
         @click="perception.pause"
@@ -115,7 +116,7 @@ function enablePerception(): void {
         {{ t('tamagotchi.stage.perception-minecraft.pause') }}
       </button>
       <button
-        v-if="minecraftStore.perceptionEnabled && minecraftStore.perceptionPaused"
+        v-if="perceptionActive && state === 'paused'"
         type="button"
         rounded-xl bg-lime-600 px-3 py-2 text-sm text-white
         @click="perception.resume"
@@ -123,7 +124,7 @@ function enablePerception(): void {
         {{ t('tamagotchi.stage.perception-minecraft.resume') }}
       </button>
       <button
-        v-if="minecraftStore.perceptionEnabled"
+        v-if="perceptionActive"
         type="button"
         border border-red-400 rounded-xl px-3 py-2 text-sm text-red-700 dark:text-red-300
         @click="perception.stop"

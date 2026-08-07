@@ -15,10 +15,15 @@ import vadWorkletUrl from '../../workers/vad/process.worklet?worker&url'
 
 import { useAnalytics } from '../../composables/use-analytics'
 import { activeTurnSpan, startSpan } from '../../composables/use-io-tracer'
+import { BoundedPcmChunkQueue } from '../../libs/audio/bounded-pcm-queue'
 import { OFFICIAL_TRANSCRIPTION_PROVIDER_ID } from '../../libs/providers'
 import { useProvidersStore } from '../providers'
 import { streamAliyunTranscription } from '../providers/aliyun/stream-transcription'
-import { QWEN3_ASR_LOCAL_PROVIDER_ID, streamQwen3AsrTranscription } from '../providers/qwen3-asr-local'
+import {
+  QWEN3_ASR_LOCAL_DEFAULT_MODEL,
+  QWEN3_ASR_LOCAL_PROVIDER_ID,
+  streamQwen3AsrTranscription,
+} from '../providers/qwen3-asr-local'
 import { streamWebSpeechAPITranscription } from '../providers/web-speech-api'
 
 function errorMessage(err: unknown): string {
@@ -320,9 +325,9 @@ export const useHearingStore = defineStore('hearing-store', () => {
   } = useAnalytics()
 
   // State
-  const activeTranscriptionProvider = useLocalStorageManualReset('settings/hearing/active-provider', '')
-  const activeTranscriptionModel = useLocalStorageManualReset('settings/hearing/active-model', '')
-  const activeCustomModelName = useLocalStorageManualReset('settings/hearing/active-custom-model', '')
+  const activeTranscriptionProvider = useLocalStorageManualReset('settings/hearing/active-provider', QWEN3_ASR_LOCAL_PROVIDER_ID)
+  const activeTranscriptionModel = useLocalStorageManualReset('settings/hearing/active-model', QWEN3_ASR_LOCAL_DEFAULT_MODEL)
+  const activeCustomModelName = useLocalStorageManualReset('settings/hearing/active-custom-model', QWEN3_ASR_LOCAL_DEFAULT_MODEL)
   const transcriptionModelSearchQuery = refManualReset<string>('')
   const autoSendEnabled = useLocalStorageManualReset<boolean>('settings/hearing/auto-send-enabled', false)
   const autoSendDelay = useLocalStorageManualReset<number>('settings/hearing/auto-send-delay', 2000) // Default 2 seconds
@@ -574,8 +579,12 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
     audioContext: AudioContext | Record<string, never>
     workletNode: AudioWorkletNode | Record<string, never>
     mediaStreamSource: MediaStreamAudioSourceNode | Record<string, never>
-    audioStreamController?: ReadableStreamDefaultController<ArrayBuffer>
+    audioCapture?: {
+      close: (reason: DOMException, abort: boolean) => void
+    }
     abortController: AbortController
+    generation: number
+    model: string
     result?: HearingTranscriptionResult & { recognition?: any }
     idleTimer?: ReturnType<typeof setTimeout>
     providerId: string
@@ -586,6 +595,7 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
   }>()
 
   let asrSpan: Span | undefined
+  let streamingSessionGeneration = 0
 
   function startStreamingAsrSpan(providerId: string) {
     activeTurnSpan.value?.end()
@@ -629,6 +639,9 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
 
   const DEFAULT_SAMPLE_RATE = 16000
   const DEFAULT_STREAM_IDLE_TIMEOUT = 15000
+  // Roughly 0.5 seconds of 16 kHz / mono / 16-bit PCM. The canonical ASR
+  // lane drops old chunks rather than accumulating an unbounded delay.
+  const MAX_QUEUED_STREAMING_PCM_BYTES = 16 * 1024
 
   function float32ToInt16(buffer: Float32Array) {
     const output = new Int16Array(buffer.length)
@@ -646,23 +659,45 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
     const workletNode = new AudioWorkletNode(audioContext, 'vad-audio-worklet-processor')
 
     let audioStreamController: ReadableStreamDefaultController<ArrayBuffer> | undefined
+    let active = true
+    const pcmQueue = new BoundedPcmChunkQueue(MAX_QUEUED_STREAMING_PCM_BYTES)
+
+    function flushPcmQueue() {
+      if (!active || !audioStreamController)
+        return
+
+      while (audioStreamController.desiredSize !== null && audioStreamController.desiredSize > 0) {
+        const chunk = pcmQueue.dequeue()
+        if (!chunk)
+          return
+        audioStreamController.enqueue(chunk)
+      }
+    }
+
     const audioStream = new ReadableStream<ArrayBuffer>({
       start(controller) {
         audioStreamController = controller
+        flushPcmQueue()
+      },
+      pull() {
+        flushPcmQueue()
       },
       cancel: () => {
+        active = false
+        pcmQueue.clear()
         audioStreamController = undefined
       },
     })
 
     workletNode.port.onmessage = ({ data }: MessageEvent<{ buffer?: Float32Array }>) => {
       const buffer = data?.buffer
-      if (!buffer || !audioStreamController)
+      if (!active || !buffer)
         return
 
       const pcm16 = float32ToInt16(buffer)
-      // Clone buffer to avoid retaining underlying ArrayBuffer references
-      audioStreamController.enqueue(pcm16.buffer.slice(0))
+      // Clone buffer to avoid retaining a worklet-owned ArrayBuffer reference.
+      pcmQueue.enqueue(pcm16.buffer.slice(0))
+      flushPcmQueue()
       onActivity?.()
     }
 
@@ -680,13 +715,25 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
       workletNode,
       mediaStreamSource,
       audioStream,
-      get controller() {
-        return audioStreamController
+      close(reason: DOMException, abort: boolean) {
+        if (!active)
+          return
+        active = false
+        pcmQueue.clear()
+        const controller = audioStreamController
+        audioStreamController = undefined
+        if (!controller)
+          return
+        if (abort)
+          controller.error(reason)
+        else
+          controller.close()
       },
     }
   }
 
   async function stopStreamingTranscription(abort?: boolean, disposeProviderId?: string) {
+    streamingSessionGeneration += 1
     const session = streamingSession.value
     if (!session)
       return
@@ -753,10 +800,7 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
         session.abortController.abort(reason)
       }
 
-      if (abort)
-        session.audioStreamController?.error(reason)
-      else
-        session.audioStreamController?.close()
+      session.audioCapture?.close(reason, !!abort)
     }
     catch {}
 
@@ -819,6 +863,9 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
 
     error.value = undefined
 
+    let invocationGeneration: number | undefined
+    let invocationAsrSpan: Span | undefined
+
     try {
       const providerId = activeTranscriptionProvider.value
       const providerError = resolveActiveTranscriptionProviderError(providerId)
@@ -876,7 +923,10 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
           }
         }
 
+        const generation = ++streamingSessionGeneration
         startStreamingAsrSpan(providerId)
+        invocationGeneration = generation
+        invocationAsrSpan = asrSpan
 
         // Auto-select default model if not selected
         if (!activeTranscriptionModel.value) {
@@ -915,6 +965,15 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
           }
         }
 
+        if (generation !== streamingSessionGeneration) {
+          endStreamingAsrSpan()
+          return
+        }
+
+        const sessionAsrSpan = asrSpan
+        const isCurrentSession = () => streamingSession.value?.generation === generation
+          && streamingSessionGeneration === generation
+          && !abortController.signal.aborted
         const result = streamWebSpeechAPITranscription(stream, {
           language,
           continuous: (options?.providerOptions?.continuous as boolean) ?? (providerConfig.continuous as boolean) ?? true,
@@ -922,16 +981,20 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
           maxAlternatives: (options?.providerOptions?.maxAlternatives as number) ?? (providerConfig.maxAlternatives as number) ?? 1,
           abortSignal: abortController.signal,
           onSentenceEnd: (delta) => {
+            if (!isCurrentSession())
+              return
             bumpIdle() // Bump idle timer on activity (only if enabled)
-            if (asrSpan)
-              asrSpan.addEvent(IOEvents.ASRSentenceEnd, { [IOAttributes.ASRText]: delta })
+            if (sessionAsrSpan && sessionAsrSpan === asrSpan)
+              sessionAsrSpan.addEvent(IOEvents.ASRSentenceEnd, { [IOAttributes.ASRText]: delta })
             // Call the options callback
             options?.onSentenceEnd?.(delta)
           },
           onSpeechEnd: (text) => {
-            if (asrSpan) {
-              asrSpan.setAttribute(IOAttributes.ASRText, text)
-              asrSpan.end()
+            if (!isCurrentSession())
+              return
+            if (sessionAsrSpan && sessionAsrSpan === asrSpan) {
+              sessionAsrSpan.setAttribute(IOAttributes.ASRText, text)
+              sessionAsrSpan.end()
               asrSpan = undefined
             }
             // Call the options callback
@@ -945,8 +1008,10 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
           audioContext: {} as AudioContext, // Not used for Web Speech API
           workletNode: {} as AudioWorkletNode, // Not used for Web Speech API
           mediaStreamSource: {} as MediaStreamAudioSourceNode, // Not used for Web Speech API
-          audioStreamController: undefined,
+          audioCapture: undefined,
           abortController,
+          generation,
+          model: activeTranscriptionModel.value,
           result: { ...result, mode: 'stream' as const, recognition: recognitionInstance },
           idleTimer,
           providerId,
@@ -991,6 +1056,8 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
       }
 
       const idleTimeout = options?.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT
+      const providerConfig = providersStore.getProviderConfig(providerId)
+      const model = resolveActiveTranscriptionModel(activeTranscriptionModel.value, providerConfig)
 
       // If a session exists, reuse it unless new callbacks are provided.
       // The stream reader captures callbacks at creation time, so updated callbacks
@@ -1001,10 +1068,12 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
           onSentenceEnd: options?.onSentenceEnd,
           onSpeechEnd: options?.onSpeechEnd,
         })
+        const providerChanged = existingSession.providerId !== providerId
+        const modelChanged = existingSession.model !== model
 
-        if (hasNewCallbacks) {
+        if (hasNewCallbacks || providerChanged || modelChanged) {
           console.info('[Hearing Pipeline] New callbacks provided, restarting session')
-          await stopStreamingTranscription(false, existingSession.providerId)
+          await stopStreamingTranscription(providerChanged || modelChanged, existingSession.providerId)
           // Fall through to create a new session with updated callbacks
         }
         else {
@@ -1019,7 +1088,11 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
         }
       }
 
+      const generation = ++streamingSessionGeneration
       startStreamingAsrSpan(providerId)
+      const sessionAsrSpan = asrSpan
+      invocationGeneration = generation
+      invocationAsrSpan = sessionAsrSpan
 
       const abortController = new AbortController()
       let idleTimer: ReturnType<typeof setTimeout> | undefined
@@ -1037,33 +1110,33 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
         () => bumpIdle(),
       )
 
+      if (generation !== streamingSessionGeneration) {
+        const reason = new DOMException('Aborted', 'AbortError')
+        session.close(reason, true)
+        await tryCatch(() => {
+          session.mediaStreamSource.disconnect()
+          session.workletNode.port.onmessage = null
+          session.workletNode.disconnect()
+        })
+        await tryCatch(() => session.audioContext.close())
+        if (sessionAsrSpan === asrSpan)
+          endStreamingAsrSpan()
+        return
+      }
+
       if (session.audioContext.state === 'suspended')
         await session.audioContext.resume()
 
       bumpIdle()
 
-      const model = activeTranscriptionModel.value
-      const result = await hearingStore.transcription(
-        providerId,
-        provider,
-        model,
-        { inputAudioStream: session.audioStream },
-        undefined,
-        {
-          providerOptions: {
-            abortSignal: abortController.signal,
-            ...options?.providerOptions,
-          },
-        },
-      )
-
-      streamingSession.value = {
+      const sessionRecord: NonNullable<typeof streamingSession.value> = {
         audioContext: session.audioContext,
         workletNode: session.workletNode,
         mediaStreamSource: session.mediaStreamSource,
-        audioStreamController: session.controller,
+        audioCapture: session,
         abortController,
-        result,
+        generation,
+        model,
         idleTimer,
         providerId,
         callbacks: {
@@ -1071,6 +1144,40 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
           onSpeechEnd: options?.onSpeechEnd,
         },
       }
+      streamingSession.value = sessionRecord
+
+      const isCurrentSession = () => streamingSession.value?.generation === generation
+        && streamingSessionGeneration === generation
+        && !abortController.signal.aborted
+
+      let result: HearingTranscriptionResult
+      try {
+        result = await hearingStore.transcription(
+          providerId,
+          provider,
+          model,
+          { inputAudioStream: session.audioStream },
+          undefined,
+          {
+            providerOptions: {
+              abortSignal: abortController.signal,
+              ...options?.providerOptions,
+            },
+          },
+        )
+      }
+      catch (err) {
+        if (isCurrentSession())
+          await stopStreamingTranscription(true, providerId)
+        throw err
+      }
+
+      if (!isCurrentSession()) {
+        session.close(new DOMException('Aborted', 'AbortError'), true)
+        return
+      }
+
+      sessionRecord.result = result
 
       // Stream out text deltas to caller without tearing down the session.
       if (result.mode === 'stream' && result.textStream) {
@@ -1078,10 +1185,7 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
           // Capture callbacks from the session at the time the reader is created
           // This prevents cross-session leakage if the session is restarted before
           // this reader finishes (e.g., when navigating between pages or callbacks change)
-          const sessionCallbacks = {
-            onSentenceEnd: streamingSession.value?.callbacks?.onSentenceEnd,
-            onSpeechEnd: streamingSession.value?.callbacks?.onSpeechEnd,
-          }
+          const sessionCallbacks = sessionRecord.callbacks
 
           let fullText = ''
           try {
@@ -1093,10 +1197,12 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
                 break
               if (value) {
                 fullText += value
-                if (asrSpan)
-                  asrSpan.addEvent(IOEvents.ASRSentenceEnd, { [IOAttributes.ASRText]: value })
+                if (!isCurrentSession())
+                  continue
+                if (sessionAsrSpan && sessionAsrSpan === asrSpan)
+                  sessionAsrSpan.addEvent(IOEvents.ASRSentenceEnd, { [IOAttributes.ASRText]: value })
                 // Use captured callbacks to avoid cross-session leakage
-                sessionCallbacks.onSentenceEnd?.(value)
+                sessionCallbacks?.onSentenceEnd?.(value)
               }
             }
           }
@@ -1114,19 +1220,21 @@ export const useHearingSpeechInputPipeline = defineStore('modules:hearing:speech
               // Preserve the last safe partial for shutdown bookkeeping.
             }
 
-            if (asrSpan) {
-              asrSpan.setAttribute(IOAttributes.ASRText, completedText)
-              asrSpan.end()
+            if (isCurrentSession() && sessionAsrSpan && sessionAsrSpan === asrSpan) {
+              sessionAsrSpan.setAttribute(IOAttributes.ASRText, completedText)
+              sessionAsrSpan.end()
               asrSpan = undefined
             }
             // Use captured callbacks to avoid cross-session leakage
-            sessionCallbacks.onSpeechEnd?.(completedText)
+            if (isCurrentSession())
+              sessionCallbacks?.onSpeechEnd?.(completedText)
           }
         })()
       }
     }
     catch (err) {
-      endStreamingAsrSpan()
+      if (invocationAsrSpan === asrSpan && invocationGeneration === streamingSessionGeneration)
+        endStreamingAsrSpan()
 
       if (isExpectedStreamStopError(err))
         return

@@ -17,7 +17,12 @@ import { useProviderValidation } from '@proj-airi/stage-ui/composables/use-provi
 import { cloneMiniMaxVoice } from '@proj-airi/stage-ui/libs/minimax-voice-clone'
 import { notifyVoiceSettingsChanged, voiceSettingsStorageKeys } from '@proj-airi/stage-ui/services/voice-settings-sync'
 import { useSpeechStore } from '@proj-airi/stage-ui/stores/modules/speech'
-import { GPT_SOVITS_LOCAL_PROVIDER_ID, useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
+import {
+  GPT_SOVITS_LOCAL_PROVIDER_ID,
+  MINIMAX_SPEECH_DEFAULT_MODEL,
+  MINIMAX_SPEECH_DEFAULT_VOICE,
+  useProvidersStore,
+} from '@proj-airi/stage-ui/stores/providers'
 import { listMiniMaxAvailableVoices } from '@proj-airi/stage-ui/stores/providers/minimax-speech'
 import { useSpeechOutputRoutingStore } from '@proj-airi/stage-ui/stores/speech-output-routing'
 import { FieldCombobox } from '@proj-airi/ui'
@@ -27,10 +32,13 @@ import { computed, onMounted, onUnmounted, shallowRef, watch } from 'vue'
 import MiniMaxExistingVoicePanel from './components/MiniMaxExistingVoicePanel.vue'
 import MiniMaxVoiceClonePanel from './components/MiniMaxVoiceClonePanel.vue'
 
-import { stopLocalVoiceService } from '../../../../composables/use-local-voice-service-start'
+import {
+  quiesceVoiceRuntimeForSwitch,
+  stopAndDisposePreviousVoiceService,
+} from '../../../../composables/use-local-voice-service-switch'
 
 const providerId = 'minimax-speech'
-const defaultModel = 'speech-2.8-turbo'
+const defaultModel = MINIMAX_SPEECH_DEFAULT_MODEL
 const speechStore = useSpeechStore()
 const speechOutputRoutingStore = useSpeechOutputRoutingStore()
 const providersStore = useProvidersStore()
@@ -74,7 +82,7 @@ const model = computed({
 })
 
 const voice = computed({
-  get: () => (providers.value[providerId]?.voice as string | undefined) || '',
+  get: () => (providers.value[providerId]?.voice as string | undefined) || MINIMAX_SPEECH_DEFAULT_VOICE,
   set: (value: string) => {
     resetActivationState()
     providers.value[providerId] = {
@@ -196,6 +204,25 @@ async function validateAndUseForVoiceConversation(): Promise<boolean> {
   const previousProviderId = speechStore.activeSpeechProvider
   isActivating.value = true
   try {
+    const quiesceResult = await quiesceVoiceRuntimeForSwitch({ reason: 'provider-switch' })
+    if (!quiesceResult.ok) {
+      activationError.value = t(quiesceResult.timedOut
+        ? 'settings.pages.modules.speech.local-service-switch.notices.runtime-quiesce-timeout'
+        : 'settings.pages.modules.speech.local-service-switch.notices.runtime-quiesce-failed')
+      return false
+    }
+
+    const previousService = await stopAndDisposePreviousVoiceService({
+      previousProviderId,
+      nextProviderId: providerId,
+      serviceIdForProvider: previousId => previousId === GPT_SOVITS_LOCAL_PROVIDER_ID ? 'gpt-sovits' : undefined,
+      disposeProvider: providerId => providersStore.disposeProviderInstance(providerId),
+    })
+    if (!previousService.ok) {
+      activationError.value = t('settings.pages.providers.provider.minimax-speech.settings.activation_failed')
+      return false
+    }
+
     await validateConfiguration()
     if (!isValid.value) {
       activationError.value = t('settings.pages.providers.provider.minimax-speech.settings.activation_failed')
@@ -206,8 +233,15 @@ async function validateAndUseForVoiceConversation(): Promise<boolean> {
     if (!catalogLoaded)
       return false
 
+    // MiniMax's account catalog may omit voice-cloning IDs that were created
+    // on another device or through the console. Once a bounded custom voice
+    // ID has been explicitly imported (and persisted in `customVoices`), it
+    // is an intentional user selection and must remain activatable across
+    // provider-page re-entry. The catalog still takes precedence for all
+    // voices returned by the provider.
     const selectedVoiceIsAvailable = accountVoices.value.some(item => item.id === voice.value)
       || trustedSessionVoiceIds.has(voice.value)
+      || customVoices.value.some(item => item.id === voice.value)
     if (!selectedVoiceIsAvailable) {
       activationError.value = t('settings.pages.providers.provider.minimax-speech.settings.voice_unavailable', { id: voice.value })
       return false
@@ -236,8 +270,6 @@ async function validateAndUseForVoiceConversation(): Promise<boolean> {
       voiceSettingsStorageKeys.textChatSpeechProfile,
       voiceSettingsStorageKeys.voiceConversationSpeechProfile,
     ])
-    if (previousProviderId === GPT_SOVITS_LOCAL_PROVIDER_ID)
-      await stopLocalVoiceService('gpt-sovits')
     activationReady.value = true
     return true
   }

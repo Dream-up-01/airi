@@ -24,6 +24,11 @@ import DeclaredLocalAsrSwitcher from './components/DeclaredLocalAsrSwitcher.vue'
 import VoiceConversationDiagnosticsPanel from './components/VoiceConversationDiagnosticsPanel.vue'
 import VoiceConversationPreferencesPanel from './components/VoiceConversationPreferencesPanel.vue'
 
+import {
+  quiesceVoiceRuntimeForSwitch,
+  stopAndDisposePreviousVoiceService,
+} from '../../../composables/use-local-voice-service-switch'
+
 const { t } = useI18n()
 
 const hearingStore = useHearingStore()
@@ -78,6 +83,9 @@ const animationFrame = ref<number>()
 
 const error = ref<string>('')
 const isMonitoring = ref(false)
+const transcriptionSwitching = ref(false)
+const transcriptionSwitchNotice = ref('')
+let transcriptionSwitchGeneration = 0
 
 const transcriptions = ref<string[]>([])
 const audios = ref<Blob[]>([])
@@ -320,6 +328,76 @@ function updateCustomModelName(value: string | undefined) {
   const modelValue = value || ''
   activeCustomModelName.value = modelValue
   activeTranscriptionModel.value = modelValue
+}
+
+async function runTranscriptionSwitch(
+  reason: 'provider-switch' | 'model-switch',
+  action: () => Promise<void> | void,
+) {
+  const generation = ++transcriptionSwitchGeneration
+  transcriptionSwitching.value = true
+  transcriptionSwitchNotice.value = ''
+
+  try {
+    const quiesceResult = await quiesceVoiceRuntimeForSwitch({ reason })
+    if (generation !== transcriptionSwitchGeneration)
+      return false
+
+    if (!quiesceResult.ok) {
+      transcriptionSwitchNotice.value = t(
+        quiesceResult.timedOut
+          ? 'settings.pages.modules.hearing.voice-conversation.local-asr.notices.runtime-quiesce-timeout'
+          : 'settings.pages.modules.hearing.voice-conversation.local-asr.notices.runtime-quiesce-failed',
+      )
+      return false
+    }
+
+    await action()
+    return true
+  }
+  finally {
+    if (generation === transcriptionSwitchGeneration)
+      transcriptionSwitching.value = false
+  }
+}
+
+async function selectTranscriptionProvider(providerId: string) {
+  if (!providerId || providerId === activeTranscriptionProvider.value || transcriptionSwitching.value)
+    return
+
+  await runTranscriptionSwitch('provider-switch', async () => {
+    const previousProviderId = activeTranscriptionProvider.value
+    const previousService = await stopAndDisposePreviousVoiceService({
+      previousProviderId,
+      nextProviderId: providerId,
+      serviceIdForProvider: previousId => previousId === QWEN3_ASR_LOCAL_PROVIDER_ID
+        ? 'qwen3-asr'
+        : previousId === SENSEVOICE_LOCAL_PROVIDER_ID
+          ? 'sensevoice'
+          : undefined,
+      disposeProvider: provider => providersStore.disposeProviderInstance(provider),
+    })
+    if (!previousService.ok) {
+      transcriptionSwitchNotice.value = t('settings.pages.modules.hearing.voice-conversation.local-asr.notices.previous-service-stop-failed')
+      return
+    }
+
+    activeTranscriptionProvider.value = providerId
+    activeTranscriptionModel.value = ''
+    activeCustomModelName.value = ''
+    trackProviderClick(providerId, 'hearing')
+  })
+}
+
+async function selectTranscriptionModel(modelId: string) {
+  if (!modelId || modelId === activeTranscriptionModel.value || transcriptionSwitching.value)
+    return
+
+  await runTranscriptionSwitch('model-switch', async () => {
+    await providersStore.disposeProviderInstance(activeTranscriptionProvider.value)
+    activeTranscriptionModel.value = modelId
+    activeCustomModelName.value = modelId
+  })
 }
 
 // Sync OpenAI Compatible model from provider config
@@ -614,12 +692,12 @@ onUnmounted(() => {
                 v-for="metadata in otherConfiguredTranscriptionProvidersMetadata"
                 :id="metadata.id"
                 :key="metadata.id"
-                v-model="activeTranscriptionProvider"
+                :model-value="activeTranscriptionProvider"
                 name="provider"
                 :value="metadata.id"
                 :title="metadata.localizedName || 'Unknown'"
                 :description="metadata.localizedDescription"
-                @click="trackProviderClick(metadata.id, 'hearing')"
+                @update:model-value="selectTranscriptionProvider"
               />
               <RouterLink
                 to="/settings/providers#transcription"
@@ -639,6 +717,12 @@ onUnmounted(() => {
                 />
               </RouterLink>
             </fieldset>
+            <p v-if="transcriptionSwitching" role="status" class="mt-2 text-sm text-primary-600 dark:text-primary-300">
+              {{ t('settings.pages.modules.hearing.voice-conversation.local-asr.switching') }}
+            </p>
+            <p v-if="transcriptionSwitchNotice" role="alert" class="mt-2 text-sm text-amber-600 dark:text-amber-300">
+              {{ transcriptionSwitchNotice }}
+            </p>
             <div v-else>
               <RouterLink
                 class="flex items-center gap-3 rounded-lg p-4"
@@ -719,8 +803,8 @@ onUnmounted(() => {
             <!-- Using the new RadioCardManySelect component for providers with models -->
             <template v-else-if="providerModels.length > 0 && supportsModelListing">
               <RadioCardManySelect
-                v-model="activeTranscriptionModel"
                 v-model:search-query="transcriptionModelSearchQuery"
+                :model-value="activeTranscriptionModel"
                 :items="providerModels.sort((a, b) => a.id === activeTranscriptionModel ? -1 : b.id === activeTranscriptionModel ? 1 : 0)"
                 :searchable="true"
                 :search-placeholder="t('settings.pages.modules.consciousness.sections.section.provider-model-selection.search_placeholder')"
@@ -731,6 +815,7 @@ onUnmounted(() => {
                 :expand-button-text="t('settings.pages.modules.consciousness.sections.section.provider-model-selection.expand')"
                 :collapse-button-text="t('settings.pages.modules.consciousness.sections.section.provider-model-selection.collapse')"
                 expanded-class="mb-12"
+                @update:model-value="selectTranscriptionModel"
                 @update:custom-value="updateCustomModelName"
               />
             </template>

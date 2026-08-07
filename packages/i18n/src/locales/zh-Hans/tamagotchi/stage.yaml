@@ -58,6 +58,8 @@ perception-screen:
   refresh: 刷新
   refreshing: 正在刷新…
   no-sources: 没有找到可用的外部屏幕或窗口。
+  sampling-rate: 画面检查频率
+  sampling-rate-option: '每秒 {rate} 次'
   consent: 我允许 AIRI 在本次会话中仅在本机观察所选来源；我知道敏感页面会自动暂停，并可随时停止。
   sensitive-pause: 遇到敏感页面时暂停分析
   start: 开始观察
@@ -78,7 +80,7 @@ perception-screen:
   confirm-fact: 确认准确
   correct-fact: 并非如此
   clear-facts: 清除本次会话事实
-  capture-profile: '{resolution} · 目标 {cadence}'
+  capture-profile: '{resolution} · 每秒检查 {rate} 次 · 分析器接纳仍为每秒 0.2–1 帧'
   capture-counts: '采样 {attempts} · 接受 {accepted} · 丢弃 {dropped} · 事实结果 {facts}'
   error-with-code: '桌面观察无法继续（{code}），没有保留任何帧。'
   state:
@@ -100,7 +102,9 @@ perception-camera:
   starting: 正在启动本地分析器…
   pause: 暂停
   stop: 停止并撤销授权
-  capture-profile: 640×360 · MediaPipe/OpenCV 最高 10 Hz · YOLO 最高 2 Hz
+  sampling-rate: 摄像头采样频率
+  sampling-rate-option: '每秒 {rate} 次'
+  capture-profile: '640×360 · MediaPipe 目标每秒 {rate} 次 · OpenCV 最高每秒 10 次 · YOLO 最高每秒 2 次'
   capture-counts: '工作帧 {observations} · 丢弃 {dropped} · 新鲜事实 {facts}'
   error-with-code: '本地摄像头感知无法继续（{code}），没有保留任何帧。'
   analyzer:
@@ -127,8 +131,9 @@ perception-cloud:
   title: 千问云感知
   endpoint: '地域：{region}'
   region-label: 中国内地 · 华北 2（北京）
+  region-boundary: 中国内地 Endpoint 的数据不会跨地域或跨境传输。
   no-upload: 当前没有云端上传。每次感知会话都需要分别授权画面与麦克风音频。
-  upload-active: 当前正在向千问上传已选择来源的画面与麦克风音频。原始数据仅在内存中短暂存在，可随时立即停止。
+  upload-active: 当前正在向千问上传已选择来源的画面与麦克风音频。AIRI 本地侧的原始音频与画面仅在内存中短暂存在并在处理后释放；已发送至千问的数据可能进入保留一个月的服务日志，可随时立即停止。
   refresh: 刷新云端状态
   validate: 验证配置状态
   validation-complete: 配置检查已完成，云端上传仍未启动。
@@ -152,12 +157,13 @@ perception-cloud:
   output: 输出
   text-only-manual: 仅文本客观 JSON · Manual 响应控制
   retention: 数据保留
-  retention-value: 控制台可用的最短保留 · 不用于训练 · 尚待控制台验证
+  retention-value: 服务日志保留一个月 · 断连立即清除模型会话上下文 · 不用于训练、改进、评估或人工审阅
   budget-title: 费用护栏
   screen-session-title: 屏幕云感知会话
   refresh-sources: 刷新屏幕与窗口来源
   select-screen-source: 选择一个屏幕或窗口
-  screen-audio-consent: 我授权在本次会话中将所选屏幕画面和真实麦克风音频上传至千问。模型转写与音频输出不会进入聊天。
+  screen-frame-consent: 我授权在本次会话中将所选屏幕画面上传至千问；上传画面可能进入保留一个月的服务日志。
+  screen-audio-consent: 我单独授权在本次屏幕会话中将真实麦克风音频上传至千问；上传音频可能进入保留一个月的服务日志。模型转写与音频输出不会进入聊天。
   capture-state: 采集状态
   windows: 感知窗口
   facts: 新鲜事实
@@ -166,7 +172,11 @@ perception-cloud:
   stop-screen: 停止并撤销授权
   camera-session-title: 摄像头云感知会话
   camera-mixed-description: 本地 MediaPipe、OpenCV 与 YOLO 会继续运行；仅在检测到有人且画面发生变化时，才以最高 1 FPS 向千问提交帧。
-  camera-audio-consent: 我分别授权在本次会话中将摄像头画面和真实麦克风音频上传至千问。
+  sampling-rate: 采样尝试频率
+  sampling-rate-option: '每秒 {rate} 次'
+  sampling-rate-limit: '目标每秒 {target} 次；云端上传仍限制为最高每秒 {limit} 次。'
+  camera-frame-consent: 我授权在本次会话中将摄像头画面上传至千问；上传画面可能进入保留一个月的服务日志。
+  camera-audio-consent: 我单独授权在本次摄像头会话中将真实麦克风音频上传至千问；上传音频可能进入保留一个月的服务日志。模型转写与音频输出不会进入聊天。
   camera-privacy-mode: 隐私模式
   resolution: 分辨率
   start-camera: 开启摄像头云感知

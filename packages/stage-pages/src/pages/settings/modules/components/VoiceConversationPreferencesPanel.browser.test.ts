@@ -34,9 +34,9 @@ function testI18n() {
                     'push-to-talk-unavailable': 'Push to talk unavailable',
                   },
                   interruptions: {
-                    'disabled': 'Disabled',
-                    'push': 'Push to interrupt',
-                    'vad-unavailable': 'VAD barge-in unavailable',
+                    disabled: 'Disabled',
+                    push: 'Push to interrupt',
+                    vad: 'Automatic VAD barge-in',
                   },
                 },
               },
@@ -59,15 +59,15 @@ describe('voice conversation preferences panel', () => {
     const selects = screen.getByRole('combobox')
 
     await selects.first().selectOptions('vad-turn-taking')
-    await selects.nth(1).selectOptions('pushToInterrupt')
+    await selects.nth(1).selectOptions('vadBargeIn')
     await screen.getByRole('switch').click()
 
     expect(store.preferences).toMatchObject({
       mode: 'vad-turn-taking',
-      interruptionPolicy: 'pushToInterrupt',
+      interruptionPolicy: 'vadBargeIn',
       cloudPrivacyAcknowledged: true,
     })
     await expect.element(screen.getByRole('option', { name: 'Push to talk unavailable' })).toBeDisabled()
-    await expect.element(screen.getByRole('option', { name: 'VAD barge-in unavailable' })).toBeDisabled()
+    await expect.element(screen.getByRole('option', { name: 'Automatic VAD barge-in' })).not.toBeDisabled()
   })
 })

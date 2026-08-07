@@ -7,6 +7,7 @@ import type {
   PerceptionContextProjection,
   PerceptionObservabilitySnapshot,
   PerceptionOwnerProvider,
+  PerceptionSamplingRate,
   PerceptionStateSnapshot,
 } from '@proj-airi/stage-ui/domains/perception'
 
@@ -18,7 +19,9 @@ import {
   createCameraLocalObjectiveEvents,
   createPerceptionContextProjection,
   createPerceptionObservabilitySnapshot,
+  defaultPerceptionSamplingRate,
   PERCEPTION_CONTRACT_VERSION,
+  perceptionSamplingIntervalMs,
   PerceptionSessionController,
   PerceptionStateManager,
 } from '@proj-airi/stage-ui/domains/perception'
@@ -38,6 +41,7 @@ export type CameraAnalyzerState = 'stopped' | 'starting' | 'ready' | 'degraded' 
 export interface LocalCameraPerceptionStatus {
   state: 'idle' | 'starting' | 'running' | 'paused' | 'stopping' | 'failed'
   generation: number
+  samplingRate: PerceptionSamplingRate
   sessionId?: string
   sourceId?: string
   processingMode?: 'local-only' | 'mixed'
@@ -56,7 +60,10 @@ export interface LocalCameraPerceptionStatus {
 export interface LocalCameraPerceptionCoordinatorOptions {
   capture: CameraCaptureRuntime
   ownerProvider: PerceptionOwnerProvider
+  samplingRate?: PerceptionSamplingRate
   now?: () => number
+  setInterval?: (callback: () => void, intervalMs: number) => ReturnType<typeof setInterval>
+  clearInterval?: (timer: ReturnType<typeof setInterval>) => void
   id?: (prefix: string) => string
   createMediaPipe?: () => MocapBackend
   createOpenCv?: () => CameraOpenCvRuntime
@@ -97,11 +104,29 @@ interface ActiveCameraRun {
   openCvAnalyzer: ReturnType<typeof createLatestCameraAnalyzer<ImageData, CameraOpenCvEvidence>>
   yoloAnalyzer: ReturnType<typeof createLatestCameraAnalyzer<ImageData, CameraYoloEvidence>>
   sequence: number
+  lastOpenCvAt: number
   lastYoloAt: number
   downstream: PerceptionDownstreamPolicyController
 }
 
+interface StartingCameraRun {
+  epoch: number
+  controller: AbortController
+  cancelled: boolean
+  lifecycle?: ProductionCameraCaptureLifecycle
+  lifecycleStop?: Promise<void>
+  mediaPipe?: MocapBackend
+  mediaPipeInit?: Promise<void>
+  mediaPipeInitSettled: boolean
+  mediaPipeCleanup?: Promise<void>
+  openCv?: CameraOpenCvRuntime
+  yolo?: CameraYoloRuntime
+  retirement?: Promise<LocalCameraPerceptionStatus>
+}
+
 const CAMERA_SOURCE_ID = 'camera:default'
+const OPENCV_MAX_FPS = 10
+const OPENCV_MIN_INTERVAL_MS = 1_000 / OPENCV_MAX_FPS
 const CAMERA_FACT_CATEGORIES = [
   'person.presence',
   'person.count',
@@ -117,6 +142,9 @@ const CAMERA_FACT_CATEGORIES = [
 export class LocalCameraPerceptionCoordinator {
   readonly #capture: CameraCaptureRuntime
   readonly #ownerProvider: PerceptionOwnerProvider
+  readonly #setInterval: NonNullable<LocalCameraPerceptionCoordinatorOptions['setInterval']>
+  readonly #clearInterval: NonNullable<LocalCameraPerceptionCoordinatorOptions['clearInterval']>
+  #samplingRate: PerceptionSamplingRate
   readonly #now: () => number
   readonly #id: (prefix: string) => string
   readonly #createMediaPipe: () => MocapBackend
@@ -128,14 +156,18 @@ export class LocalCameraPerceptionCoordinator {
   readonly #onObservability?: (snapshot: PerceptionObservabilitySnapshot | null) => void
   readonly #onProjection?: (projection: PerceptionContextProjection | null) => void
   readonly #onFrame?: (frame: ProductionCameraFrame) => void
+  #epoch = 0
+  #starting?: StartingCameraRun
+  #retirement?: Promise<void>
   #run?: ActiveCameraRun
-  #operation?: Promise<void>
-  #stopRequest?: 'stop' | 'pause'
   #status: LocalCameraPerceptionStatus = createInitialStatus()
 
   constructor(options: LocalCameraPerceptionCoordinatorOptions) {
     this.#capture = options.capture
     this.#ownerProvider = options.ownerProvider
+    this.#samplingRate = options.samplingRate ?? defaultPerceptionSamplingRate('camera')
+    this.#setInterval = options.setInterval ?? ((callback, intervalMs) => setInterval(callback, intervalMs))
+    this.#clearInterval = options.clearInterval ?? (timer => clearInterval(timer))
     this.#now = options.now ?? Date.now
     this.#id = options.id ?? (prefix => `${prefix}:camera:${crypto.randomUUID()}`)
     this.#createMediaPipe = options.createMediaPipe ?? createMediaPipeBackend
@@ -153,28 +185,54 @@ export class LocalCameraPerceptionCoordinator {
     return cloneStatus(this.#status)
   }
 
-  async start(consentConfirmed: boolean, processingMode: 'local-only' | 'mixed' = 'local-only'): Promise<LocalCameraPerceptionStatus> {
-    if (this.#operation || this.#run)
+  setSamplingRate(rate: PerceptionSamplingRate): void {
+    if (this.#samplingRate === rate)
+      return
+    this.#samplingRate = rate
+    this.#setStatus({ samplingRate: rate })
+    const run = this.#run
+    if (!run || this.#status.state !== 'running')
+      return
+    this.#clearInterval(run.timer)
+    run.timer = this.#setInterval(() => this.#captureAndSchedule(run), perceptionSamplingIntervalMs(this.#samplingRate))
+  }
+
+  async start(
+    consentConfirmed: boolean,
+    processingMode: 'local-only' | 'mixed' = 'local-only',
+    signal?: AbortSignal,
+  ): Promise<LocalCameraPerceptionStatus> {
+    if (this.#starting || this.#run)
       return this.#fail('camera-capture-busy')
     if (!consentConfirmed)
       return this.#fail('permission-denied')
-    this.#stopRequest = undefined
-    this.#setStatus({ ...createInitialStatus(), state: 'starting', analyzers: { mediapipe: 'starting', opencv: 'starting', yolo: 'starting' } })
-
-    const operation = this.#startRun(processingMode)
-    this.#operation = operation
+    if (signal?.aborted)
+      return this.status
+    await this.#awaitRetirement()
+    if (this.#starting || this.#run)
+      return this.#fail('camera-capture-busy')
+    this.#setStatus({ ...createInitialStatus(), state: 'starting', samplingRate: this.#samplingRate, analyzers: { mediapipe: 'starting', opencv: 'starting', yolo: 'starting' } })
+    const starting = createStartingRun(++this.#epoch)
+    this.#starting = starting
+    const operation = this.#startRun(starting, processingMode)
+    const onAbort = () => void this.#retireStarting(starting, 'stop')
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted)
+      onAbort()
     try {
-      await operation
+      await settleOnAbort(operation, starting.controller.signal)
     }
     finally {
-      if (this.#operation === operation)
-        this.#operation = undefined
+      signal?.removeEventListener('abort', onAbort)
+      if (this.#starting === starting)
+        this.#starting = undefined
     }
     return this.status
   }
 
   async pause(): Promise<LocalCameraPerceptionStatus> {
-    await this.#interruptPendingStart('pause')
+    if (this.#starting)
+      return this.#retireStarting(this.#starting, 'pause')
     if (!this.#run)
       return this.status
     this.#setStatus({ state: 'stopping' })
@@ -190,7 +248,9 @@ export class LocalCameraPerceptionCoordinator {
   }
 
   async stop(): Promise<LocalCameraPerceptionStatus> {
-    await this.#interruptPendingStart('stop')
+    if (this.#starting)
+      return this.#retireStarting(this.#starting, 'stop')
+    await this.#awaitRetirement()
     if (!this.#run) {
       this.#setStatus({
         state: 'idle',
@@ -239,26 +299,7 @@ export class LocalCameraPerceptionCoordinator {
     this.#publishManager(run.manager)
   }
 
-  /**
-   * Hands a stop/pause request over to a start() that is still initializing.
-   *
-   * #startRun only publishes #run after the camera stream is open and MediaPipe
-   * has loaded, so a caller arriving inside that window has nothing to tear down
-   * yet. Record the request and wait for the start to finish releasing itself,
-   * otherwise stop()/pause() would return while the camera stays on.
-   */
-  async #interruptPendingStart(kind: 'stop' | 'pause'): Promise<void> {
-    const operation = this.#operation
-    if (!operation || this.#run)
-      return
-    this.#stopRequest = kind
-    // MediaPipe warm-up can take seconds, so surface the pending teardown
-    // instead of leaving the UI on 'starting' until the start finally lands.
-    this.#setStatus({ state: 'stopping' })
-    await operation
-  }
-
-  async #startRun(processingMode: 'local-only' | 'mixed'): Promise<void> {
+  async #startRun(starting: StartingCameraRun, processingMode: 'local-only' | 'mixed'): Promise<void> {
     const now = this.#now()
     const sessionId = this.#id('session')
     const manager = new PerceptionStateManager({ sessionId, generation: 0, clock: { now: this.#now }, maxEventsPerSourcePerSecond: 64 })
@@ -271,39 +312,51 @@ export class LocalCameraPerceptionCoordinator {
       hooks: bindPerceptionLifecycleToStateManager(manager),
     })
     const lifecycle = new ProductionCameraCaptureLifecycle(session, this.#capture)
+    starting.lifecycle = lifecycle
     const grant: PerceptionConsentGrant = {
       contractVersion: PERCEPTION_CONTRACT_VERSION,
       grantId: this.#id('grant'),
       sourceKind: 'camera',
       sourceId: CAMERA_SOURCE_ID,
-      processingMode,
+      processingMode: 'local-only',
       allowedModalities: ['camera-frames'],
       allowedFactCategories: CAMERA_FACT_CATEGORIES,
       grantedAt: now,
       showPersistentIndicator: true,
     }
     const started = await lifecycle.start({ sourceId: CAMERA_SOURCE_ID, requestConsentGrant: async () => grant })
+    if (!this.#isCurrentStart(starting)) {
+      await this.#cleanupStarting(starting)
+      return
+    }
     if (!started.ok) {
-      this.#fail(started.code)
+      await this.#failStarting(starting, started.code)
       return
     }
 
     const mediaPipe = this.#createMediaPipe()
     const openCv = this.#createOpenCv()
     const yolo = this.#createYolo()
+    starting.mediaPipe = mediaPipe
+    starting.openCv = openCv
+    starting.yolo = yolo
+    const mediaPipeInit = mediaPipe.init({
+      enabled: { pose: true, hands: true, face: true },
+      hz: { pose: 10, hands: 8, face: 5 },
+      maxPeople: 1,
+    })
+    starting.mediaPipeInit = mediaPipeInit
     try {
-      await mediaPipe.init({
-        enabled: { pose: true, hands: true, face: true },
-        hz: { pose: 10, hands: 8, face: 5 },
-        maxPeople: 1,
-      })
+      await mediaPipeInit
     }
     catch {
-      await lifecycle.stop()
-      await mediaPipe.dispose?.()
-      openCv.dispose()
-      await yolo.dispose()
-      this.#fail('camera-mediapipe-init-failed')
+      starting.mediaPipeInitSettled = true
+      await this.#failStarting(starting, 'camera-mediapipe-init-failed')
+      return
+    }
+    starting.mediaPipeInitSettled = true
+    if (!this.#isCurrentStart(starting)) {
+      await this.#cleanupStarting(starting)
       return
     }
 
@@ -402,30 +455,105 @@ export class LocalCameraPerceptionCoordinator {
       openCvAnalyzer,
       yoloAnalyzer,
       sequence: 0,
+      lastOpenCvAt: Number.NEGATIVE_INFINITY,
       lastYoloAt: 0,
       downstream: new PerceptionDownstreamPolicyController(),
     }
+    starting.mediaPipe = undefined
+    starting.openCv = undefined
+    starting.yolo = undefined
     this.#run = run
-    // #run is observable from here on, so a stop()/pause() that arrived while
-    // the camera stream and MediaPipe were still initializing can finally be
-    // served. Take the regular teardown path instead of arming the capture
-    // timer: the camera track (and its indicator light) must not stay on for a
-    // run the user already cancelled.
-    const stopRequest = this.#stopRequest
-    if (stopRequest) {
-      this.#stopRequest = undefined
-      await (stopRequest === 'pause' ? this.pause() : this.stop())
-      return
-    }
+    this.#starting = undefined
     this.#setStatus({
       state: 'running',
       generation: session.session.generation,
+      samplingRate: this.#samplingRate,
       sessionId,
       sourceId: CAMERA_SOURCE_ID,
       processingMode,
       analyzers: { mediapipe: 'ready', opencv: 'starting', yolo: 'starting' },
     })
-    run.timer = setInterval(() => this.#captureAndSchedule(run), 100)
+    run.timer = this.#setInterval(() => this.#captureAndSchedule(run), perceptionSamplingIntervalMs(this.#samplingRate))
+  }
+
+  #isCurrentStart(starting: StartingCameraRun): boolean {
+    return this.#starting === starting && starting.epoch === this.#epoch && !starting.cancelled && !starting.controller.signal.aborted
+  }
+
+  async #awaitRetirement(): Promise<void> {
+    const retirement = this.#retirement
+    if (!retirement)
+      return
+    await retirement
+    if (this.#retirement === retirement)
+      this.#retirement = undefined
+  }
+
+  #retireStarting(starting: StartingCameraRun, kind: 'stop' | 'pause'): Promise<LocalCameraPerceptionStatus> {
+    if (starting.retirement)
+      return starting.retirement
+    if (this.#starting !== starting)
+      return Promise.resolve(this.status)
+
+    starting.cancelled = true
+    starting.controller.abort(kind)
+    this.#starting = undefined
+    const retirementEpoch = ++this.#epoch
+    this.#setStatus({ state: 'stopping' })
+    const retirement = (async () => {
+      await this.#cleanupStarting(starting)
+      if (this.#epoch === retirementEpoch && !this.#starting && !this.#run) {
+        this.#setStatus({
+          ...createInitialStatus(),
+          state: kind === 'pause' ? 'paused' : 'idle',
+          generation: this.#status.generation + 1,
+          samplingRate: this.#samplingRate,
+        })
+      }
+      return this.status
+    })()
+    starting.retirement = retirement
+    this.#retirement = retirement.then(() => undefined, () => undefined)
+    return retirement
+  }
+
+  async #cleanupStarting(starting: StartingCameraRun): Promise<void> {
+    if (starting.lifecycle && !starting.lifecycleStop)
+      starting.lifecycleStop = settleCleanups([() => starting.lifecycle?.stop()])
+
+    const openCv = starting.openCv
+    const yolo = starting.yolo
+    const mediaPipe = starting.mediaPipe
+    starting.openCv = undefined
+    starting.yolo = undefined
+    starting.mediaPipe = undefined
+
+    let immediateMediaPipeCleanup: Promise<void> | undefined
+    if (mediaPipe && !starting.mediaPipeCleanup) {
+      if (starting.mediaPipeInit && !starting.mediaPipeInitSettled) {
+        starting.mediaPipeCleanup = starting.mediaPipeInit
+          .then(() => undefined, () => undefined)
+          .then(() => settleCleanups([() => mediaPipe.dispose?.()]))
+      }
+      else {
+        starting.mediaPipeCleanup = settleCleanups([() => mediaPipe.dispose?.()])
+        immediateMediaPipeCleanup = starting.mediaPipeCleanup
+      }
+    }
+
+    await settleCleanups([
+      () => starting.lifecycleStop,
+      () => openCv?.dispose(),
+      () => yolo?.dispose(),
+      () => immediateMediaPipeCleanup,
+    ])
+  }
+
+  async #failStarting(starting: StartingCameraRun, errorCode: string): Promise<void> {
+    const ownedCurrentStart = this.#isCurrentStart(starting)
+    await this.#cleanupStarting(starting)
+    if (ownedCurrentStart && this.#starting === starting && starting.epoch === this.#epoch)
+      this.#fail(errorCode)
   }
 
   #captureAndSchedule(run: ActiveCameraRun): void {
@@ -437,8 +565,11 @@ export class LocalCameraPerceptionCoordinator {
       run.sequence += 1
       this.#setStatus({ observationCount: this.#status.observationCount + 1 })
       run.mediaPipeAnalyzer.submit({ frame: frame.video, capturedAt: frame.capturedAt, release: () => undefined })
-      const openCvImage = new ImageData(new Uint8ClampedArray(frame.imageData.data), frame.imageData.width, frame.imageData.height)
-      run.openCvAnalyzer.submit({ frame: openCvImage, capturedAt: frame.capturedAt, release: () => openCvImage.data.fill(0) })
+      if (frame.capturedAt - run.lastOpenCvAt >= OPENCV_MIN_INTERVAL_MS) {
+        run.lastOpenCvAt = frame.capturedAt
+        const openCvImage = new ImageData(new Uint8ClampedArray(frame.imageData.data), frame.imageData.width, frame.imageData.height)
+        run.openCvAnalyzer.submit({ frame: openCvImage, capturedAt: frame.capturedAt, release: () => openCvImage.data.fill(0) })
+      }
       if (this.#isResourceConstrained()) {
         this.#setStatus({
           analyzers: { ...this.#status.analyzers, yolo: 'degraded' },
@@ -485,19 +616,21 @@ export class LocalCameraPerceptionCoordinator {
     if (this.#run !== run)
       return
     this.#run = undefined
-    clearInterval(run.timer)
-    run.mediaPipeAnalyzer.dispose()
-    run.openCvAnalyzer.dispose()
-    run.yoloAnalyzer.dispose()
-    await run.lifecycle.stop()
-    void run.mediaPipe.dispose?.()
-    run.openCv.dispose()
-    await run.yolo.dispose()
-    run.manager.revokeAll(reason === 'stop' ? 'session-stopped' : 'source-revoked')
-    run.downstream.cancelAll(run.manager)
-    this.#onSnapshot?.(run.manager.snapshot())
-    this.#onObservability?.(null)
-    this.#onProjection?.(null)
+    await settleCleanups([
+      () => this.#clearInterval(run.timer),
+      () => run.mediaPipeAnalyzer.dispose(),
+      () => run.openCvAnalyzer.dispose(),
+      () => run.yoloAnalyzer.dispose(),
+      () => run.lifecycle.stop(),
+      () => run.mediaPipe.dispose?.(),
+      () => run.openCv.dispose(),
+      () => run.yolo.dispose(),
+      () => run.manager.revokeAll(reason === 'stop' ? 'session-stopped' : 'source-revoked'),
+      () => run.downstream.cancelAll(run.manager),
+      () => this.#onSnapshot?.(run.manager.snapshot()),
+      () => this.#onObservability?.(null),
+      () => this.#onProjection?.(null),
+    ])
   }
 
   #fail(code: string): LocalCameraPerceptionStatus {
@@ -531,6 +664,7 @@ function createInitialStatus(): LocalCameraPerceptionStatus {
   return {
     state: 'idle',
     generation: 0,
+    samplingRate: defaultPerceptionSamplingRate('camera'),
     sessionId: undefined,
     sourceId: undefined,
     processingMode: undefined,
@@ -544,4 +678,47 @@ function createInitialStatus(): LocalCameraPerceptionStatus {
 
 function cloneStatus(status: LocalCameraPerceptionStatus): LocalCameraPerceptionStatus {
   return { ...status, analyzers: { ...status.analyzers }, analyzerErrorCodes: { ...status.analyzerErrorCodes } }
+}
+
+function createStartingRun(epoch: number): StartingCameraRun {
+  return {
+    epoch,
+    controller: new AbortController(),
+    cancelled: false,
+    mediaPipeInitSettled: false,
+  }
+}
+
+async function settleOnAbort(operation: Promise<void>, signal: AbortSignal): Promise<void> {
+  if (signal.aborted)
+    return
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    void operation.then(
+      () => {
+        signal.removeEventListener('abort', onAbort)
+        resolve()
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
+async function settleCleanups(cleanups: Array<() => void | Promise<void> | undefined>): Promise<void> {
+  const operations = cleanups.map((cleanup) => {
+    try {
+      return Promise.resolve(cleanup())
+    }
+    catch {
+      return Promise.resolve()
+    }
+  })
+  await Promise.allSettled(operations)
 }

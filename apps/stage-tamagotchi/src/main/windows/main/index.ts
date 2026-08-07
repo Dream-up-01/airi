@@ -5,6 +5,7 @@ import type { I18n } from '../../libs/i18n'
 import type { WindowAuthManager } from '../../services/airi/auth'
 import type { ServerChannel } from '../../services/airi/channel-server'
 import type { GodotStageManager } from '../../services/airi/godot-stage'
+import type { LocalVoiceServiceManager } from '../../services/airi/local-voice-services'
 import type { McpStdioManager } from '../../services/airi/mcp-servers'
 import type { LocalScreenConsentRegistry } from '../../services/airi/perception/local-screen-consent-registry'
 import type { LocalTransformersScreenManager } from '../../services/airi/perception/local-transformers-screen'
@@ -63,6 +64,7 @@ export async function setupMainWindow(params: {
   onWindowCreated?: (window: BrowserWindow) => void
   serverChannel: ServerChannel
   godotStageManager: GodotStageManager
+  localVoiceServiceManager: LocalVoiceServiceManager
   mcpStdioManager: McpStdioManager
   i18n: I18n
   onboardingWindowManager: OnboardingWindowManager
@@ -199,6 +201,7 @@ export async function setupMainWindow(params: {
     autoUpdater: params.autoUpdater,
     serverChannel: params.serverChannel,
     godotStageManager: params.godotStageManager,
+    localVoiceServiceManager: params.localVoiceServiceManager,
     mcpStdioManager: params.mcpStdioManager,
     i18n: params.i18n,
     onboardingWindowManager: params.onboardingWindowManager,

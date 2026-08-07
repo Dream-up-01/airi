@@ -17,14 +17,21 @@ export const voiceConversationPreferenceBounds = {
 
 export const defaultVoiceConversationPreferences: Readonly<VoiceConversationPreferences> = Object.freeze({
   mode: 'streaming-asr',
-  interruptionPolicy: 'disabled',
+  interruptionPolicy: 'pushToInterrupt',
+  vadThreshold: 0.6,
+  minSpeechDurationMs: 250,
+  trailingSilenceMs: 800,
+  cloudPrivacyAcknowledged: false,
+})
+
+const legacyDefaultVoiceConversationPreferences = Object.freeze({
+  mode: 'streaming-asr' as const,
+  interruptionPolicy: 'disabled' as const,
   vadThreshold: 0.6,
   minSpeechDurationMs: 250,
   trailingSilenceMs: 1_600,
   cloudPrivacyAcknowledged: false,
 })
-
-const legacyDefaultTrailingSilenceMs = 800
 
 const modes = new Set<VoiceConversationMode>(['push-to-talk', 'vad-turn-taking', 'streaming-asr'])
 const interruptionPolicies = new Set<VoiceInterruptionPolicy>(['disabled', 'pushToInterrupt', 'vadBargeIn'])
@@ -47,17 +54,36 @@ export function normalizeVoiceConversationPreferences(
 }
 
 /**
- * Preserves explicit v1 preferences while moving the old 800 ms VAD default to
- * the safer natural-pause default. A later explicit 800 ms choice in v2 remains
- * untouched because this migration only runs while creating v2 storage.
+ * Migrates only a complete, known v1 default. Persisted values do not carry a
+ * schema-level distinction between an omitted field and an explicit choice, so
+ * checking every legacy field prevents a user's explicit 1600 ms tail (or a
+ * partially persisted profile) from being rewritten on startup.
  */
 export function migrateVoiceConversationPreferencesV1(
   value: Partial<VoiceConversationPreferences> | null | undefined,
 ): VoiceConversationPreferences {
   const normalized = normalizeVoiceConversationPreferences(value)
-  return normalized.trailingSilenceMs === legacyDefaultTrailingSilenceMs
-    ? { ...normalized, trailingSilenceMs: defaultVoiceConversationPreferences.trailingSilenceMs }
-    : normalized
+  if (!isCompleteLegacyDefault(value))
+    return normalized
+
+  return {
+    ...normalized,
+    interruptionPolicy: defaultVoiceConversationPreferences.interruptionPolicy,
+    trailingSilenceMs: defaultVoiceConversationPreferences.trailingSilenceMs,
+  }
+}
+
+function isCompleteLegacyDefault(value: Partial<VoiceConversationPreferences> | null | undefined): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    return false
+
+  const candidate = value as Record<string, unknown>
+  return candidate.mode === legacyDefaultVoiceConversationPreferences.mode
+    && candidate.interruptionPolicy === legacyDefaultVoiceConversationPreferences.interruptionPolicy
+    && candidate.vadThreshold === legacyDefaultVoiceConversationPreferences.vadThreshold
+    && candidate.minSpeechDurationMs === legacyDefaultVoiceConversationPreferences.minSpeechDurationMs
+    && candidate.trailingSilenceMs === legacyDefaultVoiceConversationPreferences.trailingSilenceMs
+    && candidate.cloudPrivacyAcknowledged === legacyDefaultVoiceConversationPreferences.cloudPrivacyAcknowledged
 }
 
 function clampNumber(

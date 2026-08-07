@@ -1,4 +1,5 @@
 import type { WebSocketEventInputs } from '@proj-airi/server-sdk'
+import type { ChatCancellationReason } from '@proj-airi/stage-ui/stores/chat'
 import type { ToolCallRerunPayload } from '@proj-airi/stage-ui/stores/tool-call-rerun'
 import type { ChatHistoryItem, StreamingAssistantMessage } from '@proj-airi/stage-ui/types/chat'
 import type { ChatSessionMeta } from '@proj-airi/stage-ui/types/chat-session'
@@ -85,6 +86,7 @@ type ChatSyncMessage
     | { type: 'session-snapshot', authorityId: string, snapshot: SessionSnapshotPayload }
     | { type: 'stream-snapshot', authorityId: string, snapshot: StreamSnapshotPayload }
     | ChatCommandMessage<'ingest', IngestCommandPayload>
+    | ChatCommandMessage<'cancel', { sessionId?: string, reason: ChatCancellationReason }>
     | ChatCommandMessage<'spotlight-ingest', SpotlightIngestPayload>
     | ChatCommandMessage<'retry', RetryCommandPayload>
     | ChatCommandMessage<'tool-call-rerun', ToolCallRerunPayload<ToolsetId>>
@@ -353,6 +355,10 @@ export const useChatSyncStore = defineStore('stage-tamagotchi:chat-sync', () => 
     }, payload.sessionId)
   }
 
+  function executeCancel(payload: { sessionId?: string, reason: ChatCancellationReason }) {
+    chatOrchestrator.cancelActiveSends(payload.sessionId, payload.reason)
+  }
+
   async function executeSpotlightIngest(payload: SpotlightIngestPayload): Promise<SpotlightIngestResult> {
     // NOTICE: `chatOrchestrator.ingest()` returns void; remove this snapshot
     // read once ingest returns `{ sessionId, visibleText }`.
@@ -461,6 +467,9 @@ export const useChatSyncStore = defineStore('stage-tamagotchi:chat-sync', () => 
       switch (message.command) {
         case 'ingest':
           await executeIngest(message.payload)
+          break
+        case 'cancel':
+          executeCancel(message.payload)
           break
         case 'spotlight-ingest':
           respond({ ok: true, result: await executeSpotlightIngest(message.payload) })
@@ -640,6 +649,21 @@ export const useChatSyncStore = defineStore('stage-tamagotchi:chat-sync', () => 
     })
   }
 
+  async function requestCancel(payload: { sessionId?: string, reason: ChatCancellationReason }) {
+    if (mode.value === 'authority') {
+      executeCancel(payload)
+      return
+    }
+
+    return await dispatch<void>({
+      type: 'command',
+      requestId: createRequestId(),
+      senderId: instanceId,
+      command: 'cancel',
+      payload,
+    }, 2_500, () => new Error('Timed out waiting for chat cancellation acknowledgement'))
+  }
+
   async function requestSpotlightIngest(payload: SpotlightIngestPayload) {
     if (mode.value === 'authority')
       return executeSpotlightIngest(payload)
@@ -728,6 +752,7 @@ export const useChatSyncStore = defineStore('stage-tamagotchi:chat-sync', () => 
     initialize,
     dispose,
     requestIngest,
+    requestCancel,
     requestSpotlightIngest,
     requestRetry,
     requestToolCallRerun,

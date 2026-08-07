@@ -14,6 +14,7 @@
   "scripts": {
     "lint": "eslint --cache .",
     "typecheck": "vue-tsc --noEmit",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
     "app:dev": "pnpm run dev",
     "app:build": "pnpm run build",
     "start": "electron-vite preview",

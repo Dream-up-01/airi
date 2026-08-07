@@ -149,6 +149,9 @@ export class MinecraftRuntimeConfigManager {
           ?? normalizeOptionalString(envConfig.BOT_AUTH)
           ?? normalizeOptionalString(process.env.BOT_AUTH)) as Config['bot']['auth'] | undefined,
         password: localEnvConfig.BOT_PASSWORD ?? envConfig.BOT_PASSWORD ?? process.env.BOT_PASSWORD ?? '',
+        agentControlEnabled: (localEnvConfig.MINECRAFT_AGENT_CONTROL_ENABLED
+          ?? envConfig.MINECRAFT_AGENT_CONTROL_ENABLED
+          ?? process.env.MINECRAFT_AGENT_CONTROL_ENABLED) === 'true',
       },
     }
   }

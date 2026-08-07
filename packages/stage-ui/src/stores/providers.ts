@@ -69,7 +69,12 @@ import {
   normalizeGptSovitsLocalBaseUrl,
   validateGptSovitsLocalConfig,
 } from './providers/gpt-sovits-local'
-import { createMiniMaxSpeechProvider, normalizeMiniMaxSpeechBaseUrl } from './providers/minimax-speech'
+import {
+  createMiniMaxSpeechProvider,
+  MINIMAX_SPEECH_DEFAULT_MODEL,
+  MINIMAX_SPEECH_DEFAULT_VOICE,
+  normalizeMiniMaxSpeechBaseUrl,
+} from './providers/minimax-speech'
 import { buildOpenAICompatibleProvider } from './providers/openai-compatible-builder'
 import { buildOpenRouterAudioSpeechProvider } from './providers/openrouter/audio-speech'
 import {
@@ -98,6 +103,11 @@ export {
   GPT_SOVITS_LOCAL_DEFAULT_VOICE,
   GPT_SOVITS_LOCAL_PROVIDER_ID,
 } from './providers/gpt-sovits-local'
+
+export {
+  MINIMAX_SPEECH_DEFAULT_MODEL,
+  MINIMAX_SPEECH_DEFAULT_VOICE,
+} from './providers/minimax-speech'
 
 export {
   QWEN3_ASR_LOCAL_DEFAULT_BASE_URL,
@@ -1671,6 +1681,8 @@ export const useProvidersStore = defineStore('providers', () => {
       iconColor: 'i-lobe-icons:minimax-color',
       defaultOptions: () => ({
         apiKey: '',
+        model: MINIMAX_SPEECH_DEFAULT_MODEL,
+        voice: MINIMAX_SPEECH_DEFAULT_VOICE,
         // MiniMax documents this endpoint as the lower-TTFA HTTP alternative.
         // Users can still select the standard endpoint in provider settings.
         baseUrl: 'https://api-uw.minimax.io',
@@ -1696,6 +1708,7 @@ export const useProvidersStore = defineStore('providers', () => {
           },
         ],
         listVoices: async () => [
+          { id: MINIMAX_SPEECH_DEFAULT_VOICE, name: 'AIRI Firefly', provider: 'minimax-speech', gender: 'female', languages: [{ code: 'zh', title: 'Chinese' }] },
           { id: 'English_Graceful_Lady', name: 'Graceful Lady', provider: 'minimax-speech', gender: 'female', languages: [{ code: 'en', title: 'English' }] },
           { id: 'English_Insightful_Speaker', name: 'Insightful Speaker', provider: 'minimax-speech', gender: 'male', languages: [{ code: 'en', title: 'English' }] },
           { id: 'English_radiant_girl', name: 'Radiant Girl', provider: 'minimax-speech', gender: 'female', languages: [{ code: 'en', title: 'English' }] },

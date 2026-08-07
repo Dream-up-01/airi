@@ -62,6 +62,7 @@ export const configSchema = z.object({
     // In-game username of the bot's owner ("主人"). Binds the relayed "主人" role to the real
     // player so the bot recognizes its master in-world (e.g. does not flee when the master hits it).
     masterUsername: z.string().trim().min(1).optional(),
+    agentControlEnabled: z.boolean().default(false),
   }),
   airi: z.object({
     wsBaseUrl: wsUrlString('AIRI_WS_BASEURL'),
@@ -91,6 +92,7 @@ const defaultConfig: Omit<Config, 'openai'> = {
     password: '',
     version: '1.20',
     masterUsername: undefined,
+    agentControlEnabled: false,
   },
   airi: {
     wsBaseUrl: 'ws://localhost:6121/ws',
@@ -132,6 +134,7 @@ export function initEnv(): void {
       password: defaultConfig.bot.password,
       version: env.BOT_VERSION || defaultConfig.bot.version,
       masterUsername: env.BOT_MASTER_USERNAME || defaultConfig.bot.masterUsername,
+      agentControlEnabled: env.MINECRAFT_AGENT_CONTROL_ENABLED === 'true',
     },
     airi: {
       wsBaseUrl: env.AIRI_WS_BASEURL ?? defaultConfig.airi.wsBaseUrl,

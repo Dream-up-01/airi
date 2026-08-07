@@ -64,6 +64,7 @@ import { initializeStageThreeRuntimeTraceBridge } from './bridges/stage-three-ru
 import { provideLocalCameraPerception } from './composables/perception/use-local-camera-perception'
 import { provideLocalScreenPerception } from './composables/perception/use-local-screen-perception'
 import { provideMinecraftPerception } from './composables/perception/use-minecraft-perception'
+import { createPerceptionSamplingSettings } from './composables/perception/use-perception-sampling-settings'
 import { provideQwenCloudControl } from './composables/perception/use-qwen-cloud-control'
 import { provideQwenCloudPerception } from './composables/perception/use-qwen-cloud-perception'
 import { useLanguage } from './composables/use-language'
@@ -95,12 +96,15 @@ const isMainStageWindowRoute = initialWindowRoutePath === '/'
 // Either production surface may own perception, while the shared Web Lock
 // guarantees that only one renderer can hold capture resources at a time.
 const isPerceptionControlWindowRoute = isMainStageWindowRoute || isSettingsWindowRoute
-const localScreenPerception = isPerceptionControlWindowRoute ? provideLocalScreenPerception() : null
-const localCameraPerception = isPerceptionControlWindowRoute ? provideLocalCameraPerception() : null
-const minecraftPerception = isPerceptionControlWindowRoute ? provideMinecraftPerception() : null
+const perceptionSamplingSettings = isPerceptionControlWindowRoute ? createPerceptionSamplingSettings() : null
+const localScreenPerception = isPerceptionControlWindowRoute ? provideLocalScreenPerception({ samplingSettings: perceptionSamplingSettings! }) : null
+const localCameraPerception = isPerceptionControlWindowRoute ? provideLocalCameraPerception({ samplingSettings: perceptionSamplingSettings! }) : null
+const minecraftPerception = isPerceptionControlWindowRoute
+  ? provideMinecraftPerception({ ownerEligible: isMainStageWindowRoute })
+  : null
 if (isPerceptionControlWindowRoute) {
   const qwenCloudControl = provideQwenCloudControl()
-  provideQwenCloudPerception(qwenCloudControl, localCameraPerception!)
+  provideQwenCloudPerception(qwenCloudControl, localCameraPerception!, { samplingSettings: perceptionSamplingSettings! })
 }
 const remotePerceptionStatuses = computed(() => localScreenPerception?.remoteStatuses.value ?? [])
 

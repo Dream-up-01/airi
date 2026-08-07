@@ -2,6 +2,7 @@ import type { ExtractInvokeRequestOptions } from '@moeru/eventa'
 import type { createContext as createElectronContext } from '@moeru/eventa/adapters/electron/main'
 
 import { createContext, defineInvoke } from '@moeru/eventa'
+import { QWEN_CLOUD_PRIVACY_PROFILE_ID } from '@proj-airi/stage-ui/domains/perception'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -40,6 +41,47 @@ function fromWindow(webContentsId: number): ExtractInvokeRequestOptions<Electron
 }
 
 describe('qwen cloud control manager', () => {
+  it('accepts the Electron main env-prefixed local privacy evidence', () => {
+    vi.stubEnv('MAIN_VITE_AIRI_QWEN_RETENTION_VERIFIED', 'true')
+    vi.stubEnv('MAIN_VITE_AIRI_QWEN_PRIVACY_PROFILE_ID', QWEN_CLOUD_PRIVACY_PROFILE_ID)
+    const manager = new QwenCloudControlManager({
+      getWorkspaceId: () => 'workspace-1',
+      getApiKey: () => 'secret-key-value',
+      getModelAvailabilityVerified: () => true,
+      providerClientAvailable: true,
+    })
+
+    expect(manager.status('request-main-env')).toMatchObject({
+      state: 'ready',
+      providerRetentionVerified: true,
+    })
+    vi.unstubAllEnvs()
+  })
+
+  it('binds the retention verification flag to the dated official privacy profile', () => {
+    vi.stubEnv('AIRI_QWEN_RETENTION_VERIFIED', 'true')
+    vi.stubEnv('AIRI_QWEN_PRIVACY_PROFILE_ID', 'outdated-profile')
+    const createManager = () => new QwenCloudControlManager({
+      getWorkspaceId: () => 'workspace-1',
+      getApiKey: () => 'secret-key-value',
+      getModelAvailabilityVerified: () => true,
+      providerClientAvailable: true,
+    })
+
+    expect(createManager().status('request-outdated')).toMatchObject({
+      state: 'blocked',
+      providerRetentionVerified: false,
+      blockingCodes: expect.arrayContaining(['provider-retention-unverified']),
+    })
+
+    vi.stubEnv('AIRI_QWEN_PRIVACY_PROFILE_ID', QWEN_CLOUD_PRIVACY_PROFILE_ID)
+    expect(createManager().status('request-current')).toMatchObject({
+      state: 'ready',
+      providerRetentionVerified: true,
+    })
+    vi.unstubAllEnvs()
+  })
+
   it('stays blocked and inert until every external prerequisite is verified', async () => {
     const stopActiveSessions = vi.fn()
     const manager = new QwenCloudControlManager({

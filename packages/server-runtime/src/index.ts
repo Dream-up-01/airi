@@ -139,6 +139,13 @@ interface PendingModulePairingChallenge extends ModulePairingIdentity {
   verificationCode: string
   expiresAt: number
   requiresApproval: boolean
+  /** Monotonic per-device version captured when this challenge was issued. */
+  revocationVersion: number
+}
+
+interface PendingModulePairingApproval {
+  requestId: string
+  deviceId: string
 }
 
 function pairingProofPayload(challenge: Pick<PendingModulePairingChallenge, 'moduleInstanceId' | 'requestId' | 'deviceId' | 'nonce'>): Buffer {
@@ -225,12 +232,23 @@ export interface ModulePairingApprovalRequest extends ModulePairingIdentity {
   expiresAt: number
 }
 
+/**
+ * Module identity presented at the announce boundary. Pairing providers can
+ * scope the stricter Ed25519 requirement to their own module(s), preserving
+ * legacy token/anonymous modules hosted by the same server.
+ */
+export interface ModulePairingTarget {
+  name: string
+  identity: ExtensionModuleIdentity
+}
+
 export interface ModulePairingProvider {
   isPaired: (identity: ModulePairingIdentity) => boolean | Promise<boolean>
   requestApproval: (request: ModulePairingApprovalRequest) => boolean | Promise<boolean>
   remember: (identity: ModulePairingIdentity) => void | Promise<void>
   cancelApproval?: (requestId: string) => void
   subscribeRevocations?: (listener: (deviceId: string) => void) => () => void
+  requiresPairing?: (target: ModulePairingTarget) => boolean
 }
 
 /**
@@ -311,7 +329,8 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
   const peersByModule = new Map<string, Map<number | string | undefined, AuthenticatedPeer>>()
   const consumers = createConsumerOrchestrator()
   const pendingModulePairings = new Map<string, PendingModulePairingChallenge>()
-  const pendingModulePairingApprovals = new Map<string, string>()
+  const pendingModulePairingApprovals = new Map<string, PendingModulePairingApproval>()
+  const modulePairingRevocationVersions = new Map<string, number>()
   const heartbeatTtlMs = options?.heartbeat?.readTimeout ?? serverWsDefaultHeartbeatTtlMs
   const heartbeatMessage = options?.heartbeat?.message ?? MessageHeartbeat.Pong
   const RESPONSES = createResponses(instanceId)
@@ -609,6 +628,20 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
     },
   })
   const unsubscribeModulePairingRevocations = modulePairing?.subscribeRevocations?.((deviceId) => {
+    modulePairingRevocationVersions.set(deviceId, (modulePairingRevocationVersions.get(deviceId) ?? 0) + 1)
+
+    for (const [peerId, challenge] of pendingModulePairings) {
+      if (challenge.deviceId === deviceId)
+        pendingModulePairings.delete(peerId)
+    }
+
+    for (const [peerId, approval] of pendingModulePairingApprovals) {
+      if (approval.deviceId !== deviceId)
+        continue
+      pendingModulePairingApprovals.delete(peerId)
+      modulePairing?.cancelApproval?.(approval.requestId)
+    }
+
     for (const peerInfo of peers.values()) {
       if (peerInfo.pairingDeviceId === deviceId) {
         unregisterModulePeer(peerInfo, 'pairing-revoked')
@@ -770,6 +803,7 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
             verificationCode: modulePairingVerificationCode(nonce, identity.publicKey),
             expiresAt: Date.now() + MODULE_PAIRING_CHALLENGE_TTL_MS,
             requiresApproval: !paired,
+            revocationVersion: modulePairingRevocationVersions.get(identity.deviceId) ?? 0,
           }
           pendingModulePairings.set(peer.id, challenge)
           send(peer, {
@@ -810,7 +844,10 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
           return
         }
 
-        pendingModulePairingApprovals.set(peer.id, challenge.requestId)
+        pendingModulePairingApprovals.set(peer.id, {
+          requestId: challenge.requestId,
+          deviceId: challenge.deviceId,
+        })
         void (async () => {
           const identity: ModulePairingIdentity = {
             deviceId: challenge.deviceId,
@@ -818,6 +855,14 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
             displayName: challenge.displayName,
             clientVersion: challenge.clientVersion,
           }
+          if (!challenge.requiresApproval) {
+            const stillPaired = await modulePairing.isPaired(identity)
+            if (!stillPaired || (modulePairingRevocationVersions.get(challenge.deviceId) ?? 0) !== challenge.revocationVersion) {
+              send(peer, RESPONSES.error(ServerErrorMessages.pairingProofInvalid, event.metadata?.event.id))
+              return
+            }
+          }
+
           const approved = !challenge.requiresApproval || await modulePairing.requestApproval({
             ...identity,
             requestId: challenge.requestId,
@@ -831,8 +876,19 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
             return
           }
 
+          if ((modulePairingRevocationVersions.get(challenge.deviceId) ?? 0) !== challenge.revocationVersion) {
+            send(peer, RESPONSES.error(ServerErrorMessages.pairingDenied, event.metadata?.event.id))
+            return
+          }
+
           if (challenge.requiresApproval)
             await modulePairing.remember(identity)
+
+          if ((modulePairingRevocationVersions.get(challenge.deviceId) ?? 0) !== challenge.revocationVersion
+            || !await modulePairing.isPaired(identity)) {
+            send(peer, RESPONSES.error(ServerErrorMessages.pairingDenied, event.metadata?.event.id))
+            return
+          }
 
           currentPeer.authenticated = true
           currentPeer.pairingDeviceId = challenge.deviceId
@@ -949,6 +1005,16 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
 
         if (!isExtensionModuleIdentity(identity)) {
           send(peer, RESPONSES.error(ServerErrorMessages.moduleAnnounceIdentityInvalid))
+
+          return
+        }
+
+        // A pairing provider may opt specific modules into device-bound auth.
+        // Do not use `authToken` as the proxy here: the anonymous compatibility
+        // mode intentionally sends an optimistic authenticated response, and
+        // that must not turn into a bypass for a protected module.
+        if (modulePairing?.requiresPairing?.({ name, identity }) && !p.pairingDeviceId) {
+          send(peer, RESPONSES.error(ServerErrorMessages.mustAuthenticateBeforeAnnouncing))
 
           return
         }
@@ -1180,10 +1246,10 @@ export function setupApp(options?: AppOptions): { app: H3, closeAllPeers: () => 
 
   function handlePeerClose(peer: Peer, details?: WsCloseDetails) {
     pendingModulePairings.delete(peer.id)
-    const approvalRequestId = pendingModulePairingApprovals.get(peer.id)
-    if (approvalRequestId) {
+    const approval = pendingModulePairingApprovals.get(peer.id)
+    if (approval) {
       pendingModulePairingApprovals.delete(peer.id)
-      modulePairing?.cancelApproval?.(approvalRequestId)
+      modulePairing?.cancelApproval?.(approval.requestId)
     }
     const p = peers.get(peer.id)
     const now = Date.now()

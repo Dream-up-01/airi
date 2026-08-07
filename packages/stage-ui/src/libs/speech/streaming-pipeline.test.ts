@@ -169,6 +169,40 @@ describe('createStreamingTtsPipeline', () => {
     expect(calls[1].audio.__byteLength).toBe(chunks[2].length)
   })
 
+  it('bounds text queued while the websocket handshake is still connecting', async () => {
+    server = await startMockServer((ws) => {
+      ws.on('message', (data, isBinary) => {
+        if (isBinary)
+          return
+        const event = JSON.parse(data.toString()) as { event?: string }
+        if (event.event === 'finish')
+          ws.send(JSON.stringify({ event: 'session.finished', payload: {} }))
+      })
+    })
+
+    const onDone = vi.fn()
+    const handle = createStreamingTtsPipeline({
+      serverUrl: server.url,
+      model: 'volcengine/seed-tts-1.0',
+      voice: 'mock',
+      audioContext: makeStubAudioContext(),
+      onDone,
+    })
+
+    for (let index = 0; index < 256; index++)
+      handle.appendText(`token-${index}-${'x'.repeat(1024)}`)
+    handle.finish()
+
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledTimes(1), { timeout: 1500 })
+    const textFrames = server.receivedFrames
+      .filter(frame => frame.kind === 'text')
+      .map(frame => JSON.parse(frame.data as string) as { event?: string, text?: string })
+      .filter(frame => frame.event === 'text')
+
+    expect(textFrames.length).toBeLessThanOrEqual(64)
+    expect(textFrames.reduce((bytes, frame) => bytes + (frame.text?.length ?? 0), 0)).toBeLessThanOrEqual(64 * 1024)
+  })
+
   it('buffers entire session when bufferEntireSession is true', async () => {
     const chunks = [Buffer.from([1, 2, 3, 4]), Buffer.from([5, 6, 7, 8])]
     server = await startMockServer((ws) => {

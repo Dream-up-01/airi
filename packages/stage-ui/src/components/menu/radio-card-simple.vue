@@ -33,8 +33,9 @@ const modelValue = defineModel<string>({ required: true })
     block min-w-50 w-fit cursor-pointer items-start rounded-xl p-4 text-left
   >
     <input
-      v-model="modelValue"
+      :key="`${id}-${modelValue === value}`"
       :checked="modelValue === value"
+      @change="modelValue = value"
       type="radio"
       :name="name"
       :value="value"

@@ -47,10 +47,10 @@ describe('voice conversation preferences store', () => {
 
     expect(store.preferences).toEqual({
       mode: 'streaming-asr',
-      interruptionPolicy: 'disabled',
+      interruptionPolicy: 'pushToInterrupt',
       vadThreshold: 0.9,
       minSpeechDurationMs: 100,
-      trailingSilenceMs: 1_600,
+      trailingSilenceMs: 800,
       cloudPrivacyAcknowledged: false,
     })
     expect(JSON.stringify(storageMock.storedValue)).not.toContain('must-not-persist')

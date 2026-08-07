@@ -70,4 +70,50 @@ describe('streamQwen3AsrTranscription', () => {
     expect(snapshots).toEqual(['你好', '你好，世界', '你好，世界。'])
     expect(fetchMock.mock.calls.filter(([target]) => String(target).includes('/api/chunk'))).toHaveLength(2)
   })
+
+  it('cancels a pending microphone read when the stream aborts', async () => {
+    let resolveRead: ((result: ReadableStreamReadResult<ArrayBuffer>) => void) | undefined
+    const read = vi.fn(() => new Promise<ReadableStreamReadResult<ArrayBuffer>>((resolve) => {
+      resolveRead = resolve
+    }))
+    const cancel = vi.fn(async () => {
+      resolveRead?.({ done: true, value: undefined })
+    })
+    const reader = {
+      cancel,
+      read,
+      releaseLock: vi.fn(),
+    } as unknown as ReadableStreamDefaultReader<ArrayBuffer>
+    const inputAudioStream = {
+      getReader: () => reader,
+    } as unknown as ReadableStream<ArrayBuffer>
+    const fetchMock = vi.fn<typeof fetch>(async (request: RequestInfo | URL) => {
+      const url = String(request)
+      if (url.endsWith('/api/start'))
+        return new Response(JSON.stringify({ session_id: 'session-abort' }))
+      if (url.includes('/api/cancel'))
+        return new Response(JSON.stringify({ cancelled: true }))
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const abortController = new AbortController()
+
+    const result = streamQwen3AsrTranscription({
+      abortSignal: abortController.signal,
+      baseURL: 'http://127.0.0.1:8001/',
+      fetch: fetchMock,
+      inputAudioStream,
+      model: 'Qwen/Qwen3-ASR-0.6B',
+    })
+
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some(([request, init]) => {
+      return String(request) === 'http://127.0.0.1:8001/api/start'
+        && (init as RequestInit | undefined)?.method === 'POST'
+    })).toBe(true))
+    await vi.waitFor(() => expect(read).toHaveBeenCalled())
+    abortController.abort(new Error('test-cancel'))
+
+    await expect(result.text).rejects.toMatchObject({ message: 'test-cancel' })
+    expect(cancel).toHaveBeenCalledWith(expect.any(Error))
+    expect(fetchMock.mock.calls.some(([request]) => String(request).includes('/api/cancel'))).toBe(true)
+  })
 })

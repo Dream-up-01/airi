@@ -26,6 +26,10 @@ import { storeToRefs } from 'pinia'
 import { computed, onMounted, shallowRef } from 'vue'
 
 import { startLocalVoiceService } from '../../../../composables/use-local-voice-service-start'
+import {
+  isManagedLocalVoiceServiceEndpoint,
+  stopAndDisposePreviousVoiceService,
+} from '../../../../composables/use-local-voice-service-switch'
 
 const providerId = GPT_SOVITS_LOCAL_PROVIDER_ID
 const speechStore = useSpeechStore()
@@ -114,11 +118,25 @@ async function generateSpeech(input: string, voiceId: string) {
 async function validateAndActivate() {
   activationError.value = ''
   isStarting.value = true
+  const previousProviderId = speechStore.activeSpeechProvider
   try {
-    const startResult = await startLocalVoiceService('gpt-sovits')
-    if (!startResult.ok) {
-      activationError.value = t(`settings.pages.providers.provider.gpt-sovits-local.settings.start_errors.${startResult.errorCode}`)
+    const previousService = await stopAndDisposePreviousVoiceService({
+      previousProviderId,
+      nextProviderId: providerId,
+      serviceIdForProvider: previousId => previousId === providerId ? 'gpt-sovits' : undefined,
+      disposeProvider: providerId => providersStore.disposeProviderInstance(providerId),
+    })
+    if (!previousService.ok) {
+      activationError.value = t('settings.pages.providers.provider.gpt-sovits-local.settings.activation_failed')
       return
+    }
+
+    if (isManagedLocalVoiceServiceEndpoint('gpt-sovits', baseUrl.value)) {
+      const startResult = await startLocalVoiceService('gpt-sovits')
+      if (!startResult.ok) {
+        activationError.value = t(`settings.pages.providers.provider.gpt-sovits-local.settings.start_errors.${startResult.errorCode}`)
+        return
+      }
     }
 
     await providersStore.disposeProviderInstance(providerId)

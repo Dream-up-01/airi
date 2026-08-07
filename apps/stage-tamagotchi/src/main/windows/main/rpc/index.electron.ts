@@ -4,6 +4,7 @@ import type { I18n } from '../../../libs/i18n'
 import type { WindowAuthManager } from '../../../services/airi/auth'
 import type { ServerChannel } from '../../../services/airi/channel-server'
 import type { GodotStageManager } from '../../../services/airi/godot-stage'
+import type { LocalVoiceServiceManager } from '../../../services/airi/local-voice-services'
 import type { McpStdioManager } from '../../../services/airi/mcp-servers'
 import type { LocalScreenConsentRegistry } from '../../../services/airi/perception/local-screen-consent-registry'
 import type { LocalTransformersScreenManager } from '../../../services/airi/perception/local-transformers-screen'
@@ -18,6 +19,7 @@ import type { WidgetsWindowManager } from '../../widgets'
 
 import { defineInvokeHandler } from '@moeru/eventa'
 import { createContext } from '@moeru/eventa/adapters/electron/main'
+import { electronStartLocalVoiceService, electronStopLocalVoiceService, isLocalVoiceServiceId } from '@proj-airi/stage-ui/domains/localVoiceServices'
 import { ipcMain } from 'electron'
 
 import { electronOpenChat, electronOpenMainDevtools, electronOpenSettings, noticeWindowEventa } from '../../../../shared/eventa'
@@ -45,6 +47,7 @@ export async function setupMainWindowElectronInvokes(params: {
   autoUpdater: AutoUpdater
   serverChannel: ServerChannel
   godotStageManager: GodotStageManager
+  localVoiceServiceManager: LocalVoiceServiceManager
   mcpStdioManager: McpStdioManager
   i18n: I18n
   onboardingWindowManager: OnboardingWindowManager
@@ -73,6 +76,16 @@ export async function setupMainWindowElectronInvokes(params: {
   createGodotStageService({ context, manager: params.godotStageManager, window: params.window })
   createOnboardingService({ context, onboardingWindowManager: params.onboardingWindowManager, mainWindow: params.window })
   createAuthService({ context, window: params.window, windowAuthManager: params.windowAuthManager })
+  defineInvokeHandler(context, electronStartLocalVoiceService, (payload) => {
+    if (!isLocalVoiceServiceId(payload?.serviceId))
+      throw new TypeError('Invalid local voice service id')
+    return params.localVoiceServiceManager.start(payload.serviceId)
+  })
+  defineInvokeHandler(context, electronStopLocalVoiceService, (payload) => {
+    if (!isLocalVoiceServiceId(payload?.serviceId))
+      throw new TypeError('Invalid local voice service id')
+    return params.localVoiceServiceManager.stop(payload.serviceId)
+  })
 
   const cleanupLocalScreenConsent = createLocalScreenConsentService({
     context,

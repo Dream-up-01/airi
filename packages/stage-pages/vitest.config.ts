@@ -18,11 +18,32 @@ export default defineConfig({
     Info(),
   ],
   test: {
-    include: ['src/**/*.browser.test.ts'],
-    browser: {
-      enabled: true,
-      provider: playwright(),
-      instances: [{ browser: 'chromium' }],
-    },
+    // NOTICE:
+    // Paths here are relative to the working directory, so this config must be run
+    // with cwd set to this package. Use the `test:browser` script, or the root
+    // `test-pages:run` script which delegates through pnpm --filter.
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'node',
+          include: ['src/**/*.test.ts'],
+          exclude: ['src/**/*.browser.test.ts', '**/node_modules/**'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'browser',
+          include: ['src/**/*.browser.test.ts'],
+          exclude: ['**/node_modules/**'],
+          browser: {
+            enabled: true,
+            provider: playwright(),
+            instances: [{ browser: 'chromium' }],
+          },
+        },
+      },
+    ],
   },
 })

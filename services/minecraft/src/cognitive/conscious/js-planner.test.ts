@@ -522,6 +522,33 @@ describe('javaScriptPlanner', () => {
     expect(end).not.toHaveBeenCalled()
   })
 
+  it('botCall rejects methods outside the bounded low-level allowlist', async () => {
+    const planner = new JavaScriptPlanner()
+    const chat = vi.fn()
+    const globalsWithBot = { ...globals, mineflayer: { bot: { chat } } } as any
+    const executeAction = vi.fn(async action => `ok:${action.tool}`)
+
+    await expect(
+      planner.evaluate('await botCall("chat", ["/op me"])', actions, globalsWithBot, executeAction),
+    ).rejects.toThrow(/not allowed/i)
+    expect(chat).not.toHaveBeenCalled()
+  })
+
+  it.each(['setControlState', 'activateItem'])(
+    'botCall rejects persistent control method %s',
+    async (method) => {
+      const planner = new JavaScriptPlanner()
+      const persistentControl = vi.fn()
+      const globalsWithBot = { ...globals, mineflayer: { bot: { [method]: persistentControl } } } as any
+      const executeAction = vi.fn(async action => `ok:${action.tool}`)
+
+      await expect(
+        planner.evaluate(`await botCall(${JSON.stringify(method)}, [])`, actions, globalsWithBot, executeAction),
+      ).rejects.toThrow(/not allowed/i)
+      expect(persistentControl).not.toHaveBeenCalled()
+    },
+  )
+
   it('query.entities().whereName filters nearby entities by name in the sandbox', async () => {
     const planner = new JavaScriptPlanner()
     const mineflayer = {

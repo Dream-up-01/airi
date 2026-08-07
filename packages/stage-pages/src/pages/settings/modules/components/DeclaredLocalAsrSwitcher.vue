@@ -16,10 +16,19 @@ import { storeToRefs } from 'pinia'
 import { computed, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { startLocalVoiceService, stopLocalVoiceService } from '../../../../composables/use-local-voice-service-start'
+import { startLocalVoiceService } from '../../../../composables/use-local-voice-service-start'
+import {
+  isManagedLocalVoiceServiceEndpoint,
+  quiesceVoiceRuntimeForSwitch,
+  stopAndDisposePreviousVoiceService,
+} from '../../../../composables/use-local-voice-service-switch'
 
 type ActivationErrorCode = LocalVoiceServiceStartErrorCode | 'validation_failed' | 'unexpected'
-type ActivationNoticeCode = 'previous-service-not-managed' | 'previous-service-stop-failed'
+type ActivationNoticeCode
+  = | 'previous-service-not-managed'
+    | 'previous-service-stop-failed'
+    | 'runtime-quiesce-failed'
+    | 'runtime-quiesce-timeout'
 
 interface DeclaredLocalAsrProfile {
   providerId: string
@@ -78,12 +87,35 @@ async function activate(profile: DeclaredLocalAsrProfile) {
   trackProviderClick(profile.providerId, 'hearing')
 
   try {
+    const quiesceResult = await quiesceVoiceRuntimeForSwitch({ reason: 'provider-switch' })
+    if (!quiesceResult.ok) {
+      activationNoticeCode.value = quiesceResult.timedOut
+        ? 'runtime-quiesce-timeout'
+        : 'runtime-quiesce-failed'
+      return
+    }
+
+    const previousService = await stopAndDisposePreviousVoiceService({
+      previousProviderId: previousProfile?.providerId,
+      nextProviderId: profile.providerId,
+      serviceIdForProvider: providerId => profiles.value.find(candidate => candidate.providerId === providerId)?.serviceId,
+      disposeProvider: providerId => providersStore.disposeProviderInstance(providerId),
+    })
+    if (!previousService.ok) {
+      activationNoticeCode.value = previousService.noticeCode
+      return
+    }
+    activationNoticeCode.value = previousService.noticeCode
+
     providersStore.initializeProvider(profile.providerId)
 
-    const startResult = await startLocalVoiceService(profile.serviceId)
-    if (!startResult.ok) {
-      activationErrorCode.value = startResult.errorCode
-      return
+    const providerConfig = providersStore.getProviderConfig(profile.providerId)
+    if (isManagedLocalVoiceServiceEndpoint(profile.serviceId, providerConfig?.baseUrl)) {
+      const startResult = await startLocalVoiceService(profile.serviceId)
+      if (!startResult.ok) {
+        activationErrorCode.value = startResult.errorCode
+        return
+      }
     }
 
     await providersStore.disposeProviderInstance(profile.providerId)
@@ -102,15 +134,6 @@ async function activate(profile: DeclaredLocalAsrProfile) {
       voiceSettingsStorageKeys.activeTranscriptionModel,
       voiceSettingsStorageKeys.activeTranscriptionCustomModel,
     ])
-
-    if (previousProfile && previousProfile.serviceId !== profile.serviceId) {
-      const stopResult = await stopLocalVoiceService(previousProfile.serviceId)
-      if (!stopResult.ok)
-        activationNoticeCode.value = 'previous-service-stop-failed'
-      else if (!stopResult.stopped)
-        activationNoticeCode.value = 'previous-service-not-managed'
-      await providersStore.disposeProviderInstance(previousProfile.providerId)
-    }
   }
   catch {
     activationErrorCode.value = 'unexpected'
@@ -133,6 +156,8 @@ async function activate(profile: DeclaredLocalAsrProfile) {
     </div>
 
     <fieldset class="min-w-0 flex gap-4 overflow-x-auto scroll-smooth" role="radiogroup" :disabled="!!activatingProviderId">
+      <!-- Keep the native radio from showing an uncommitted choice while
+           the previous service is being stopped and the new one validated. -->
       <RadioCardSimple
         v-for="profile in profiles"
         :id="profile.providerId"
@@ -142,7 +167,7 @@ async function activate(profile: DeclaredLocalAsrProfile) {
         :value="profile.providerId"
         :title="profile.label"
         :description="profile.description"
-        @click="activate(profile)"
+        @click.prevent="activate(profile)"
       >
         <template #topRight>
           <div v-if="activatingProviderId === profile.providerId" class="animate-spin text-primary-600 dark:text-primary-300" i-solar:spinner-line-duotone />

@@ -252,7 +252,7 @@ app.whenReady().then(async () => {
   })
 
   const mainWindow = injeca.provide('windows:main', {
-    dependsOn: { settingsWindow, chatWindow, widgetsManager, noticeWindow, beatSync, autoUpdater, serverChannel, godotStageManager, mcpStdioManager, i18n, onboardingWindowManager, windowAuthManager, localScreenConsentRegistry, localTransformersScreenManager, qwenCloudControlManager, qwenCloudGrantRegistry, qwenCloudMediaGatewayManager },
+    dependsOn: { settingsWindow, chatWindow, widgetsManager, noticeWindow, beatSync, autoUpdater, serverChannel, godotStageManager, localVoiceServiceManager, mcpStdioManager, i18n, onboardingWindowManager, windowAuthManager, localScreenConsentRegistry, localTransformersScreenManager, qwenCloudControlManager, qwenCloudGrantRegistry, qwenCloudMediaGatewayManager },
     build: async ({ dependsOn }) => setupMainWindow({
       ...dependsOn,
       onWindowCreated: (window) => {

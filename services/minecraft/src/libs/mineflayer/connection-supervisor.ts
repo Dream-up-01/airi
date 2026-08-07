@@ -15,6 +15,7 @@ export interface ConnectionSupervisorDeps {
   logger: Logg
   reconnect?: ReconnectOptions
   spawnTimeoutMs?: number
+  beforeCleanup: () => Promise<void>
   replaceBot: (context: ReconnectContext) => Promise<void>
 }
 
@@ -92,6 +93,19 @@ export function createConnectionSupervisor(deps: ConnectionSupervisorDeps): Conn
   }
 
   async function handleDisconnect(reason: string): Promise<void> {
+    if (stopping)
+      return
+
+    try {
+      await deps.beforeCleanup()
+    }
+    catch (error) {
+      if (state === 'awaiting_spawn')
+        transitionState('idle', 'disconnect-cleanup-error')
+
+      throw error
+    }
+
     if (stopping)
       return
 

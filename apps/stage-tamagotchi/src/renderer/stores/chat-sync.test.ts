@@ -107,6 +107,7 @@ interface MockState {
   setSessionMessages: ReturnType<typeof vi.fn>
   getSessionMessages: ReturnType<typeof vi.fn>
   ingest: ReturnType<typeof vi.fn>
+  cancelActiveSends: ReturnType<typeof vi.fn>
 }
 
 let mockState: MockState
@@ -137,6 +138,7 @@ vi.mock('@proj-airi/stage-ui/stores/chat', () => ({
   useChatOrchestratorStore: () => ({
     sending: ref(false),
     ingest: mockState.ingest,
+    cancelActiveSends: mockState.cancelActiveSends,
   }),
 }))
 
@@ -223,6 +225,7 @@ describe('useChatSyncStore', async () => {
     const ingest = vi.fn(async () => {
       throw new Error('Remote sent 403 response: {"error":{"message":"This model is not available in your region.","code":403}}')
     })
+    const cancelActiveSends = vi.fn()
 
     mockResolveLlmTools.mockReset()
     mockResolveLlmTools.mockResolvedValue([])
@@ -241,6 +244,7 @@ describe('useChatSyncStore', async () => {
       setSessionMessages,
       getSessionMessages,
       ingest,
+      cancelActiveSends,
     }
 
     vi.stubGlobal('BroadcastChannel', MockBroadcastChannel)
@@ -465,6 +469,34 @@ describe('useChatSyncStore', async () => {
     expect(mockState.ingest).toHaveBeenCalledWith('hello spotlight', expect.objectContaining({
       tools: expect.any(Function),
     }), 'session-1')
+
+    authorityStore.dispose()
+    followerStore.dispose()
+  })
+
+  it('forwards follower cancellation requests to the authority and awaits acknowledgement', async () => {
+    const { authorityStore, followerStore } = initializeAuthorityAndFollower()
+
+    await followerStore.requestCancel({
+      sessionId: 'session-1',
+      reason: 'provider-switch',
+    })
+
+    expect(mockState.cancelActiveSends).toHaveBeenCalledWith('session-1', 'provider-switch')
+    expect(postedMessagesOfType('command').filter(message => message.command === 'cancel')).toEqual([
+      expect.objectContaining({
+        command: 'cancel',
+        payload: {
+          sessionId: 'session-1',
+          reason: 'provider-switch',
+        },
+      }),
+    ])
+    expect(postedMessagesOfType('response')).toEqual([
+      expect.objectContaining({
+        ok: true,
+      }),
+    ])
 
     authorityStore.dispose()
     followerStore.dispose()

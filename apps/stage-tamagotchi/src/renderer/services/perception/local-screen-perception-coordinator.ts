@@ -3,6 +3,7 @@ import type {
   PerceptionContextProjection,
   PerceptionObservabilitySnapshot,
   PerceptionOwnerProvider,
+  PerceptionSamplingRate,
   PerceptionStateSnapshot,
 } from '@proj-airi/stage-ui/domains/perception'
 import type { LocalScreenAnalyzerControllerErrorCode } from '@proj-airi/stage-ui/services/perception'
@@ -14,6 +15,8 @@ import {
   createPerceptionContextProjection,
   createPerceptionObservabilitySnapshot,
   createWebLockPerceptionOwnerProvider,
+  defaultPerceptionSamplingRate,
+  perceptionSamplingIntervalMs,
   PerceptionSessionController,
   PerceptionStateManager,
 } from '@proj-airi/stage-ui/domains/perception'
@@ -31,6 +34,7 @@ export interface LocalScreenPerceptionStatus {
   state: LocalScreenPerceptionState
   sessionId?: string
   generation: number
+  samplingRate: PerceptionSamplingRate
   sourceId?: string
   modelId?: string
   lastErrorCode?: string
@@ -59,6 +63,7 @@ export interface LocalScreenPerceptionCoordinatorOptions {
   consent: LocalScreenConsentClient
   ownerProvider?: PerceptionOwnerProvider
   ownerId?: string
+  samplingRate?: PerceptionSamplingRate
   id?: (prefix: 'session' | 'grant' | 'frame' | 'observation') => string
   now?: () => number
   monotonicNow?: () => number
@@ -97,6 +102,7 @@ export class LocalScreenPerceptionCoordinator {
   readonly #consent: LocalScreenConsentClient
   readonly #ownerProvider: PerceptionOwnerProvider
   readonly #ownerId: string
+  #samplingRate: PerceptionSamplingRate
   readonly #id: NonNullable<LocalScreenPerceptionCoordinatorOptions['id']>
   readonly #now: () => number
   readonly #setInterval: NonNullable<LocalScreenPerceptionCoordinatorOptions['setInterval']>
@@ -111,6 +117,7 @@ export class LocalScreenPerceptionCoordinator {
   #status: LocalScreenPerceptionStatus = {
     state: 'idle',
     generation: 0,
+    samplingRate: defaultPerceptionSamplingRate('screen'),
     acceptedFactCount: 0,
     captureAttemptCount: 0,
     acceptedFrameCount: 0,
@@ -127,6 +134,7 @@ export class LocalScreenPerceptionCoordinator {
     this.#consent = options.consent
     this.#ownerProvider = options.ownerProvider ?? createWebLockPerceptionOwnerProvider(navigator.locks)
     this.#ownerId = options.ownerId ?? 'renderer:main'
+    this.#samplingRate = options.samplingRate ?? defaultPerceptionSamplingRate('screen')
     this.#id = options.id ?? (prefix => `${prefix}:screen:${crypto.randomUUID()}`)
     this.#now = options.now ?? Date.now
     this.#setInterval = options.setInterval ?? ((callback, intervalMs) => setInterval(callback, intervalMs))
@@ -143,6 +151,19 @@ export class LocalScreenPerceptionCoordinator {
     return { ...this.#status }
   }
 
+  setSamplingRate(rate: PerceptionSamplingRate): void {
+    if (this.#samplingRate === rate)
+      return
+    this.#samplingRate = rate
+    this.#setStatus({ samplingRate: rate })
+    const run = this.#run
+    if (!run || this.#status.state !== 'running')
+      return
+    if (run.timer)
+      this.#clearInterval(run.timer)
+    run.timer = this.#setInterval(() => void this.#sample(run), perceptionSamplingIntervalMs(this.#samplingRate))
+  }
+
   async listSources(): Promise<ProductionScreenSource[]> {
     return await this.#capture.listSources()
   }
@@ -156,6 +177,7 @@ export class LocalScreenPerceptionCoordinator {
     this.#setStatus({
       state: 'starting',
       generation: 0,
+      samplingRate: this.#samplingRate,
       sourceId: request.sourceId,
       lastErrorCode: undefined,
       lastGateReason: undefined,
@@ -270,7 +292,7 @@ export class LocalScreenPerceptionCoordinator {
 
       manager.setSourceHealth({ sourceId: request.sourceId, sourceKind: 'screen', status: 'healthy', updatedAt: this.#now() })
       this.#setStatus({ state: 'running', modelId: analyzerStarted.profile.modelId })
-      run.timer = this.#setInterval(() => void this.#sample(run), 500)
+      run.timer = this.#setInterval(() => void this.#sample(run), perceptionSamplingIntervalMs(this.#samplingRate))
       this.#publishSnapshot(run)
       return this.status
     }
@@ -295,6 +317,7 @@ export class LocalScreenPerceptionCoordinator {
         state: 'idle',
         sessionId: undefined,
         generation: 0,
+        samplingRate: this.#samplingRate,
         sourceId: undefined,
         modelId: undefined,
         lastGateReason: undefined,
@@ -464,6 +487,7 @@ export class LocalScreenPerceptionCoordinator {
         state: targetState,
         sessionId: targetState === 'paused' || targetState === 'failed' ? run.sessionId : undefined,
         generation: targetState === 'paused' || targetState === 'failed' ? run.session.session.generation : 0,
+        samplingRate: this.#samplingRate,
         sourceId: targetState === 'paused' || targetState === 'failed' ? run.sourceId : undefined,
         modelId: undefined,
         acceptedFactCount: 0,

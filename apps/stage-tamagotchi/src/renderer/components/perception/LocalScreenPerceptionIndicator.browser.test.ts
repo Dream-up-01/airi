@@ -12,6 +12,7 @@ describe('local screen perception indicator', () => {
         status: {
           state: 'running',
           generation: 1,
+          samplingRate: 2,
           modelId: 'Qwen/Qwen3-VL-4B-Instruct',
           acceptedFactCount: 1,
           captureAttemptCount: 1,

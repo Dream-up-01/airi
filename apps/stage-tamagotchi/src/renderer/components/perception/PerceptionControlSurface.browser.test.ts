@@ -1,15 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-vue'
+import { shallowRef } from 'vue'
 import { createI18n } from 'vue-i18n'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
 import PerceptionControlSurface from './PerceptionControlSurface.vue'
+
+const SCREEN_FRAME_CONSENT = 'I authorize the selected screen frames to be uploaded to Qwen for this session; uploaded frames may enter service logs retained for one month.'
+const SCREEN_AUDIO_CONSENT = 'I separately authorize real microphone audio to be uploaded to Qwen for this screen session; uploaded audio may enter service logs retained for one month. No model transcript or audio output will enter chat.'
+const CAMERA_FRAME_CONSENT = 'I authorize camera frames to be uploaded to Qwen for this session; uploaded frames may enter service logs retained for one month.'
+const CAMERA_AUDIO_CONSENT = 'I separately authorize real microphone audio to be uploaded to Qwen for this camera session; uploaded audio may enter service logs retained for one month. No model transcript or audio output will enter chat.'
 
 const mocks = vi.hoisted(() => ({
   screen: {
     status: { value: {
       state: 'idle',
       generation: 0,
+      samplingRate: 2,
       acceptedFactCount: 0,
       captureAttemptCount: 0,
       acceptedFrameCount: 0,
@@ -23,6 +30,7 @@ const mocks = vi.hoisted(() => ({
     uiErrorCode: { value: undefined },
     remoteStatuses: { value: [] },
     observability: { value: null },
+    samplingRate: { value: 2 },
     refreshSources: vi.fn(async () => {}),
     start: vi.fn(async () => {}),
     pause: vi.fn(async () => {}),
@@ -31,11 +39,13 @@ const mocks = vi.hoisted(() => ({
     confirmFact: vi.fn(),
     retractFact: vi.fn(),
     clearFacts: vi.fn(),
+    setSamplingRate: vi.fn(),
   },
   camera: {
     status: { value: {
       state: 'idle',
       generation: 0,
+      samplingRate: 10,
       acceptedFactCount: 0,
       observationCount: 0,
       droppedFrameCount: 0,
@@ -44,12 +54,14 @@ const mocks = vi.hoisted(() => ({
     } },
     remoteStatuses: { value: [] },
     observability: { value: null },
+    samplingRate: { value: 10 },
     start: vi.fn(async () => {}),
     pause: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
     confirmFact: vi.fn(),
     retractFact: vi.fn(),
     clearFacts: vi.fn(),
+    setSamplingRate: vi.fn(),
   },
   minecraft: {
     configured: false,
@@ -81,6 +93,15 @@ const mocks = vi.hoisted(() => ({
     resume: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
   },
+  pairing: {
+    requests: { __v_isRef: true, value: [] },
+    devices: { __v_isRef: true, value: [] },
+    error: { __v_isRef: true, value: undefined },
+    refresh: vi.fn(async () => {}),
+    approve: vi.fn(async () => {}),
+    reject: vi.fn(async () => {}),
+    revoke: vi.fn(async () => {}),
+  },
   cloud: {
     status: { value: {
       state: 'blocked',
@@ -91,6 +112,7 @@ const mocks = vi.hoisted(() => ({
       providerClientAvailable: false,
       costLedgerAvailable: true,
       uploadActive: false,
+      providerDataBoundary: 'cn-mainland-no-cross-region-or-cross-border',
       cost: { sessionSpent: 0, daySpent: 0, monthSpent: 0 },
     } },
     isLoading: { value: false },
@@ -111,8 +133,9 @@ const mocks = vi.hoisted(() => ({
       completedWindows: 0,
       droppedFrames: 0,
       acceptedFactCount: 0,
+      samplingRate: 2,
     } },
-    screenSources: { value: [] },
+    screenSources: { value: [] as Array<{ id: string, name: string, kind: 'screen' | 'window' }> },
     isRefreshingSources: { value: false },
     observability: { value: null },
     cameraStatus: { value: {
@@ -128,6 +151,7 @@ const mocks = vi.hoisted(() => ({
       acceptedFactCount: 0,
       resolution: '640x360',
       privacyMode: false,
+      samplingRate: 10,
     } },
     cameraObservability: { value: null },
     refreshScreenSources: vi.fn(async () => {}),
@@ -153,6 +177,10 @@ vi.mock('../../composables/perception/use-minecraft-perception', () => ({
   useMinecraftPerception: () => ({ ...mocks.minecraftContext, store: mocks.minecraft }),
 }))
 
+vi.mock('../../composables/perception/use-minecraft-pairing', () => ({
+  useMinecraftPairing: () => mocks.pairing,
+}))
+
 vi.mock('../../composables/perception/use-qwen-cloud-control', () => ({
   useQwenCloudControl: () => mocks.cloud,
 }))
@@ -175,13 +203,24 @@ function testI18n() {
             'perception-runtime': {
               'remote-read-only': 'Another AIRI window is collecting perception. This window is read-only.',
             },
-            'perception-screen': { tab: 'Desktop' },
-            'perception-camera': { tab: 'Camera' },
+            'perception-screen': {
+              'tab': 'Desktop',
+              'sampling-rate': 'Frame check frequency',
+              'sampling-rate-option': '{rate} per second',
+              'capture-profile': '{resolution} · {rate} checks per second · analyzer admission remains 0.2–1 frame per second',
+            },
+            'perception-camera': {
+              'tab': 'Camera',
+              'sampling-rate': 'Camera sampling frequency',
+              'sampling-rate-option': '{rate} per second',
+              'capture-profile': '640×360 · MediaPipe target {rate} per second · OpenCV up to 10 per second · YOLO up to 2 per second',
+            },
             'perception-cloud': {
               'tab': 'Cloud',
               'title': 'Qwen cloud perception',
               'endpoint': 'Region: {region}',
               'region-label': 'China mainland',
+              'region-boundary': 'China mainland Endpoint traffic does not cross regions or borders.',
               'no-upload': 'No cloud upload is active.',
               'upload-active': 'Cloud upload is active.',
               'refresh': 'Refresh cloud status',
@@ -195,7 +234,8 @@ function testI18n() {
               'screen-session-title': 'Screen cloud session',
               'refresh-sources': 'Refresh sources',
               'select-screen-source': 'Select a screen or window',
-              'screen-audio-consent': 'Authorize screen frames and real microphone audio.',
+              'screen-frame-consent': SCREEN_FRAME_CONSENT,
+              'screen-audio-consent': SCREEN_AUDIO_CONSENT,
               'capture-state': 'Capture',
               'windows': 'Windows',
               'facts': 'Fresh facts',
@@ -204,17 +244,21 @@ function testI18n() {
               'stop-screen': 'Stop and revoke',
               'camera-session-title': 'Camera cloud session',
               'camera-mixed-description': 'Local analyzers remain active.',
-              'camera-audio-consent': 'Authorize camera frames and real microphone audio.',
+              'camera-frame-consent': CAMERA_FRAME_CONSENT,
+              'camera-audio-consent': CAMERA_AUDIO_CONSENT,
               'camera-privacy-mode': 'Privacy mode',
               'resolution': 'Resolution',
               'start-camera': 'Start camera cloud perception',
+              'sampling-rate': 'Sampling attempt frequency',
+              'sampling-rate-option': '{rate} per second',
+              'sampling-rate-limit': 'Target {target} per second; cloud upload remains capped at {limit} per second.',
               'screen-model': 'Screen',
               'screen-route-value': 'Flash with temporary Plus',
               'camera-model': 'Camera',
               'output': 'Output',
               'text-only-manual': 'Text-only objective JSON',
               'retention': 'Retention',
-              'retention-value': 'Shortest available',
+              'retention-value': 'Service logs: one month · session context cleared on disconnect · not used for training, improvement, evaluation, or human review',
               'budget-title': 'Cost guard',
               'budget': { session: 'Session', day: 'Day', month: 'Month' },
               'state': { loading: 'Loading', blocked: 'Blocked', ready: 'Ready', stopped: 'Stopped', failed: 'Failed' },
@@ -282,6 +326,34 @@ function testRouter() {
 
 describe('perception control surface', () => {
   beforeEach(() => {
+    mocks.screen.samplingRate = shallowRef(2)
+    mocks.camera.samplingRate = shallowRef(10)
+    mocks.cloudPerception.screenStatus = shallowRef({
+      ...mocks.cloudPerception.screenStatus.value,
+      state: 'idle',
+      captureState: 'idle',
+    })
+    mocks.cloudPerception.cameraStatus = shallowRef({
+      ...mocks.cloudPerception.cameraStatus.value,
+      state: 'idle',
+      captureState: 'idle',
+    })
+    mocks.screen.status.value.samplingRate = 2
+    mocks.camera.status.value.samplingRate = 10
+    mocks.cloudPerception.screenStatus.value.samplingRate = 2
+    mocks.cloudPerception.cameraStatus.value.samplingRate = 10
+    mocks.cloudPerception.screenSources.value = []
+    mocks.cloud.status.value.state = 'blocked'
+    mocks.screen.setSamplingRate.mockImplementation((rate) => {
+      mocks.screen.samplingRate.value = rate
+      mocks.screen.status.value.samplingRate = rate
+      mocks.cloudPerception.screenStatus.value.samplingRate = rate
+    })
+    mocks.camera.setSamplingRate.mockImplementation((rate) => {
+      mocks.camera.samplingRate.value = rate
+      mocks.camera.status.value.samplingRate = rate
+      mocks.cloudPerception.cameraStatus.value.samplingRate = rate
+    })
     mocks.screen.status.value.state = 'idle'
     mocks.camera.status.value.state = 'idle'
     mocks.minecraft.perceptionEnabled = false
@@ -297,6 +369,12 @@ describe('perception control surface', () => {
       mocks.cloud.refresh,
       mocks.cloud.validate,
       mocks.cloud.stop,
+      mocks.cloudPerception.startScreen,
+      mocks.cloudPerception.pauseScreen,
+      mocks.cloudPerception.stopScreen,
+      mocks.cloudPerception.startCamera,
+      mocks.cloudPerception.pauseCamera,
+      mocks.cloudPerception.stopCamera,
     ])
       fn.mockClear()
   })
@@ -317,6 +395,43 @@ describe('perception control surface', () => {
     expect(mocks.minecraftContext.start).toHaveBeenCalledWith(true)
   })
 
+  it('keeps desktop and camera rates independent and shares them with cloud controls', async () => {
+    const screen = await render(PerceptionControlSurface, {
+      global: { plugins: [testI18n(), testRouter()] },
+    })
+
+    await screen.getByRole('combobox', { name: 'Frame check frequency' }).selectOptions('5')
+    expect(mocks.screen.setSamplingRate).toHaveBeenCalledWith(5)
+
+    await screen.getByRole('button', { name: 'Camera' }).click()
+    await screen.getByRole('combobox', { name: 'Camera sampling frequency' }).selectOptions('30')
+    expect(mocks.camera.setSamplingRate).toHaveBeenCalledWith(30)
+
+    await screen.getByRole('button', { name: 'Cloud' }).click()
+    const frequencyControls = screen.getByRole('combobox', { name: 'Sampling attempt frequency' })
+    await expect.element(frequencyControls.nth(0)).toHaveValue('30')
+    await expect.element(frequencyControls.nth(1)).toHaveValue('5')
+    await expect.element(screen.getByText('Target 30 per second; cloud upload remains capped at 1 per second.')).toBeVisible()
+    await expect.element(screen.getByText('Target 5 per second; cloud upload remains capped at 1 per second.')).toBeVisible()
+  })
+
+  it('distinguishes target sampling from analyzer admission limits', async () => {
+    mocks.screen.status.value.state = 'running'
+    mocks.screen.status.value.samplingRate = 30
+    mocks.screen.samplingRate = shallowRef(30)
+    mocks.camera.status.value.state = 'running'
+    mocks.camera.status.value.samplingRate = 30
+    mocks.camera.samplingRate = shallowRef(30)
+
+    const screen = await render(PerceptionControlSurface, {
+      global: { plugins: [testI18n(), testRouter()] },
+    })
+
+    await expect.element(screen.getByText('1280×720 · 30 checks per second · analyzer admission remains 0.2–1 frame per second')).toBeVisible()
+    await screen.getByRole('button', { name: 'Camera' }).click()
+    await expect.element(screen.getByText('640×360 · MediaPipe target 30 per second · OpenCV up to 10 per second · YOLO up to 2 per second')).toBeVisible()
+  })
+
   it('pauses every active local source from one control', async () => {
     mocks.screen.status.value.state = 'running'
     mocks.camera.status.value.state = 'running'
@@ -332,15 +447,15 @@ describe('perception control surface', () => {
     expect(mocks.minecraftContext.pause).toHaveBeenCalledOnce()
   })
 
-  it('keeps consent controls read-only while another renderer owns perception', async () => {
+  it('shows the remote-owner state without a second consent control', async () => {
     mocks.minecraftContext.hasRemoteOwner.value = true
     const screen = await render(PerceptionControlSurface, {
       global: { plugins: [testI18n(), testRouter()] },
     })
 
     await screen.getByRole('button', { name: 'Minecraft' }).click()
-    await expect.element(screen.getByRole('checkbox', { name: /Allow authenticated/ })).toBeDisabled()
-    await expect.element(screen.getByRole('button', { name: 'Enable game perception' })).toBeDisabled()
+    await expect.element(screen.getByText(/Another AIRI window is collecting perception/)).toBeVisible()
+    await expect.element(screen.getByRole('button', { name: 'Stop and revoke' })).toBeVisible()
   })
 
   it('shows cloud policy as inert until external readiness is verified', async () => {
@@ -352,6 +467,8 @@ describe('perception control surface', () => {
     await expect.element(screen.getByRole('heading', { name: 'Qwen cloud perception' })).toBeVisible()
     await expect.element(screen.getByText('No cloud upload is active.')).toBeVisible()
     await expect.element(screen.getByText('Blocked')).toBeVisible()
+    await expect.element(screen.getByText('China mainland Endpoint traffic does not cross regions or borders.')).toBeVisible()
+    await expect.element(screen.getByText('Service logs: one month · session context cleared on disconnect · not used for training, improvement, evaluation, or human review')).toBeVisible()
   })
 
   it('confirms that a cloud configuration check completed without enabling uploads', async () => {
@@ -364,6 +481,89 @@ describe('perception control surface', () => {
 
     expect(mocks.cloud.validate).toHaveBeenCalledOnce()
     await expect.element(screen.getByText('Configuration check completed. Cloud upload remains off.')).toBeVisible()
+  })
+
+  it('requires separate frame and microphone authorization for both cloud sources', async () => {
+    mocks.cloud.status.value.state = 'ready'
+    mocks.cloudPerception.screenSources.value = [{ id: 'window:screen', name: 'Editor', kind: 'window' }]
+    const screen = await render(PerceptionControlSurface, {
+      global: { plugins: [testI18n(), testRouter()] },
+    })
+
+    await screen.getByRole('button', { name: 'Cloud' }).click()
+    await screen.getByRole('combobox', { name: 'Select a screen or window' }).selectOptions('window:screen')
+
+    const startScreen = screen.getByRole('button', { name: 'Start screen cloud perception' })
+    const screenFrameConsent = screen.getByRole('checkbox', { name: SCREEN_FRAME_CONSENT })
+    const screenAudioConsent = screen.getByRole('checkbox', { name: SCREEN_AUDIO_CONSENT })
+    await screenFrameConsent.click()
+    await expect.element(startScreen).toBeDisabled()
+    await screenAudioConsent.click()
+    await expect.element(startScreen).toBeEnabled()
+    await startScreen.click()
+    expect(mocks.cloudPerception.startScreen).toHaveBeenCalledWith('window:screen', true, true)
+
+    const startCamera = screen.getByRole('button', { name: 'Start camera cloud perception' })
+    const cameraFrameConsent = screen.getByRole('checkbox', { name: CAMERA_FRAME_CONSENT })
+    const cameraAudioConsent = screen.getByRole('checkbox', { name: CAMERA_AUDIO_CONSENT })
+    await cameraAudioConsent.click()
+    await expect.element(startCamera).toBeDisabled()
+    await cameraFrameConsent.click()
+    await expect.element(startCamera).toBeEnabled()
+    await startCamera.click()
+    expect(mocks.cloudPerception.startCamera).toHaveBeenCalledWith(true, true)
+  })
+
+  it('disables cloud source selection and authorization while startup is in progress', async () => {
+    mocks.cloud.status.value.state = 'ready'
+    mocks.cloudPerception.screenSources.value = [{ id: 'window:screen', name: 'Editor', kind: 'window' }]
+    mocks.cloudPerception.screenStatus.value = { ...mocks.cloudPerception.screenStatus.value, captureState: 'starting' }
+    mocks.cloudPerception.cameraStatus.value = { ...mocks.cloudPerception.cameraStatus.value, captureState: 'starting' }
+    const screen = await render(PerceptionControlSurface, {
+      global: { plugins: [testI18n(), testRouter()] },
+    })
+
+    await screen.getByRole('button', { name: 'Cloud' }).click()
+
+    await expect.element(screen.getByRole('combobox', { name: 'Select a screen or window' })).toBeDisabled()
+    await expect.element(screen.getByRole('checkbox', { name: SCREEN_FRAME_CONSENT })).toBeDisabled()
+    await expect.element(screen.getByRole('checkbox', { name: SCREEN_AUDIO_CONSENT })).toBeDisabled()
+    await expect.element(screen.getByRole('button', { name: 'Start screen cloud perception' })).toBeDisabled()
+    await expect.element(screen.getByRole('checkbox', { name: CAMERA_FRAME_CONSENT })).toBeDisabled()
+    await expect.element(screen.getByRole('checkbox', { name: CAMERA_AUDIO_CONSENT })).toBeDisabled()
+    await expect.element(screen.getByRole('button', { name: 'Start camera cloud perception' })).toBeDisabled()
+  })
+
+  it('clears both cloud authorizations after pause and requires reauthorization', async () => {
+    mocks.cloud.status.value.state = 'ready'
+    mocks.cloudPerception.screenSources.value = [{ id: 'window:screen', name: 'Editor', kind: 'window' }]
+    const screen = await render(PerceptionControlSurface, {
+      global: { plugins: [testI18n(), testRouter()] },
+    })
+
+    await screen.getByRole('button', { name: 'Cloud' }).click()
+    await screen.getByRole('combobox', { name: 'Select a screen or window' }).selectOptions('window:screen')
+    const screenFrameConsent = screen.getByRole('checkbox', { name: SCREEN_FRAME_CONSENT })
+    const screenAudioConsent = screen.getByRole('checkbox', { name: SCREEN_AUDIO_CONSENT })
+    await screenFrameConsent.click()
+    await screenAudioConsent.click()
+    mocks.cloudPerception.screenStatus.value = { ...mocks.cloudPerception.screenStatus.value, state: 'running', captureState: 'running' }
+    await screen.getByRole('button', { name: 'Pause', exact: true }).click()
+    mocks.cloudPerception.screenStatus.value = { ...mocks.cloudPerception.screenStatus.value, state: 'idle', captureState: 'paused' }
+    await expect.element(screenFrameConsent).not.toBeChecked()
+    await expect.element(screenAudioConsent).not.toBeChecked()
+    await expect.element(screen.getByRole('button', { name: 'Start screen cloud perception' })).toBeDisabled()
+
+    const cameraFrameConsent = screen.getByRole('checkbox', { name: CAMERA_FRAME_CONSENT })
+    const cameraAudioConsent = screen.getByRole('checkbox', { name: CAMERA_AUDIO_CONSENT })
+    await cameraFrameConsent.click()
+    await cameraAudioConsent.click()
+    mocks.cloudPerception.cameraStatus.value = { ...mocks.cloudPerception.cameraStatus.value, state: 'running', captureState: 'running' }
+    await screen.getByRole('button', { name: 'Pause', exact: true }).click()
+    mocks.cloudPerception.cameraStatus.value = { ...mocks.cloudPerception.cameraStatus.value, state: 'idle', captureState: 'paused' }
+    await expect.element(cameraFrameConsent).not.toBeChecked()
+    await expect.element(cameraAudioConsent).not.toBeChecked()
+    await expect.element(screen.getByRole('button', { name: 'Start camera cloud perception' })).toBeDisabled()
   })
 
   // The router is not incidental scaffolding: the pairing notification opens

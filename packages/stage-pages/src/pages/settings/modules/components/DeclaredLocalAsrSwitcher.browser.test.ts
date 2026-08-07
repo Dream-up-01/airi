@@ -16,6 +16,7 @@ import DeclaredLocalAsrSwitcher from './DeclaredLocalAsrSwitcher.vue'
 
 const mocks = vi.hoisted(() => ({
   notify: vi.fn(),
+  quiesce: vi.fn(),
   start: vi.fn(),
   stop: vi.fn(),
 }))
@@ -34,6 +35,16 @@ vi.mock('@proj-airi/stage-ui/services/voice-settings-sync', () => ({
     activeTranscriptionCustomModel: 'settings/hearing/active-custom-model',
   },
 }))
+
+vi.mock('../../../../composables/use-local-voice-service-switch', async () => {
+  const actual = await vi.importActual<typeof import('../../../../composables/use-local-voice-service-switch')>(
+    '../../../../composables/use-local-voice-service-switch',
+  )
+  return {
+    ...actual,
+    quiesceVoiceRuntimeForSwitch: mocks.quiesce,
+  }
+})
 
 function testI18n() {
   return createI18n({
@@ -115,6 +126,8 @@ describe('declared local ASR switcher', () => {
   beforeEach(() => {
     localStorage.clear()
     mocks.notify.mockReset()
+    mocks.quiesce.mockReset()
+    mocks.quiesce.mockResolvedValue({ ok: true, timedOut: false })
     mocks.start.mockReset()
     mocks.start.mockResolvedValue({
       ok: true,
@@ -129,10 +142,11 @@ describe('declared local ASR switcher', () => {
     localStorage.clear()
   })
 
-  it('starts and validates Qwen before publishing the active ASR model', async () => {
+  it('stops and disposes SenseVoice before it starts and validates Qwen', async () => {
     const { pinia, screen } = await renderSwitcher()
     const providersStore = useProvidersStore(pinia)
-    providersStore.disposeProviderInstance = vi.fn().mockResolvedValue(undefined)
+    const disposeProviderInstance = vi.fn().mockResolvedValue(undefined)
+    providersStore.disposeProviderInstance = disposeProviderInstance
     providersStore.validateProvider = vi.fn().mockResolvedValue(true)
 
     await screen.getByRole('radio', { name: /Qwen3-ASR 0.6B/ }).click()
@@ -144,6 +158,8 @@ describe('declared local ASR switcher', () => {
     expect(providersStore.validateProvider).toHaveBeenCalledWith(QWEN3_ASR_LOCAL_PROVIDER_ID, { force: true })
     expect(mocks.notify).toHaveBeenCalledOnce()
     expect(mocks.stop).toHaveBeenCalledWith('sensevoice')
+    expect(mocks.stop.mock.invocationCallOrder[0]).toBeLessThan(mocks.start.mock.invocationCallOrder[0])
+    expect(disposeProviderInstance.mock.invocationCallOrder[0]).toBeLessThan(mocks.start.mock.invocationCallOrder[0])
     await expect.element(screen.getByRole('radio', { name: /Qwen3-ASR 0.6B/ })).toBeChecked()
   })
 
@@ -160,6 +176,8 @@ describe('declared local ASR switcher', () => {
     await expect.element(screen.getByRole('alert')).toHaveTextContent('Launch failed.')
     expect(useHearingStore(pinia).activeTranscriptionProvider).toBe(SENSEVOICE_LOCAL_PROVIDER_ID)
     expect(mocks.notify).not.toHaveBeenCalled()
-    expect(mocks.stop).not.toHaveBeenCalled()
+    expect(mocks.stop).toHaveBeenCalledWith('sensevoice')
+    await expect.element(screen.getByRole('radio', { name: /Qwen3-ASR 0.6B/ })).not.toBeChecked()
+    await expect.element(screen.getByRole('radio', { name: /SenseVoice-Small/ })).toBeChecked()
   })
 })

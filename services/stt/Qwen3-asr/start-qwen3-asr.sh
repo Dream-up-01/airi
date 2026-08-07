@@ -34,7 +34,7 @@ export TRANSFORMERS_OFFLINE=1
 
 exec "${VENV}/bin/python3" "${SCRIPT}" \
   --model "${MODEL}" \
-  --host 0.0.0.0 \
+  --host 127.0.0.1 \
   --port "${PORT}" \
   --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
   --chunk-size-sec 1.0 \
